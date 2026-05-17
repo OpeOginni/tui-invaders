@@ -1,0 +1,38 @@
+{
+  "name": "tui-invaders",
+  "version": "0.1.0",
+  "description": "Terminal Space Invaders built with OpenTUI. Pixel art ships, bosses, drops, high scores.",
+  "type": "module",
+  "bin": {
+    "tui-invaders": "./bin/tui-invaders.js"
+  },
+  "files": [
+    "src",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "tui",
+    "terminal",
+    "game",
+    "space-invaders",
+    "opentui",
+    "opencode",
+    "cli-game"
+  ],
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "check": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "@opentui/core": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
