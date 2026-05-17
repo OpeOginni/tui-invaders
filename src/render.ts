@@ -1,5 +1,5 @@
 import { RGBA, StyledText, type TextChunk, type TextRenderable } from "@opentui/core"
-import { currentPlayerSprite, currentPlayerTopY } from "./game"
+import { currentPlayerSprite, currentPlayerTopY, gunCostToNext } from "./game"
 import { DAX_BOSS_FRAMES, DAX_PIXEL_FRAMES, DROP_SPRITES } from "./sprites"
 import type { GameState, HighScore } from "./types"
 
@@ -71,6 +71,8 @@ export type RenderOptions = {
   nameBuffer: string
   overSaved: boolean
   isHighScore: boolean
+  isTopScore: boolean
+  scoreRank: number
   stars: Star[]
 }
 
@@ -144,6 +146,7 @@ function dropTone(kind: keyof typeof DROP_SPRITES): Tone {
   if (kind === "shield") return "player"
   if (kind === "spread") return "heavy"
   if (kind === "triple") return "drop"
+  if (kind === "pierce") return "starBright"
   return "danger"
 }
 
@@ -300,10 +303,11 @@ function drawHud(painter: Painter, { state, highscores, width, height, now }: Re
     now < state.rapidUntil ? "RAPID" : "",
     now < state.spreadUntil ? "SPREAD" : "",
     now < state.tripleUntil ? "TRIPLE" : "",
+    now < state.pierceUntil ? "PIERCE" : "",
     now < state.player.shieldUntil ? "SHIELD" : "",
   ]
     .filter(Boolean)
-    .join(" ")
+    .join(" | ")
   painter.drawText(` Level ${state.wave}`, 2, 0, "boost")
   const a = `  Score ${state.score}`
   painter.drawText(a, 11, 0, "hud")
@@ -311,12 +315,13 @@ function drawHud(painter: Painter, { state, highscores, width, height, now }: Re
   painter.drawText(b, 11 + a.length, 0, "drop")
   const c = `  Lives ${state.player.hp}`
   painter.drawText(c, 11 + a.length + b.length, 0, "danger")
-  const d = `  Gun Lv.${state.gunLevel}`
+  const next = gunCostToNext(state.gunLevel)
+  const d = next > 0 ? `  Gun Lv.${state.gunLevel} (${state.gunXP}/${next})` : `  Gun Lv.${state.gunLevel} MAX`
   painter.drawText(d, 11 + a.length + b.length + c.length, 0, "player")
   painter.drawText(hi ? `Best ${hi.score} ${hi.name}` : "Best none", width - 24, 0, "boost")
   if (boosts) painter.drawText(boosts, 3, height - 1, "boost")
   else painter.drawText("[P] pause", 3, height - 1, "dim")
-  painter.drawText("Drops: gun ▟█▙  rapid ▟▙  shield ◖█◗  spread ╲█╱  triple ▌█▐  life ♥", width - 72, height - 1, "drop")
+  painter.drawText("gun ▟█▙ rapid ▌▌▌ shield ◖█◗ spread ╲█╱ triple ▌█▐ pierce ▶█▶ life ♥", width - 71, height - 1, "drop")
 }
 
 function drawPauseDialog(painter: Painter, width: number, height: number) {
@@ -341,15 +346,16 @@ function drawPauseDialog(painter: Painter, width: number, height: number) {
   }
 }
 
-function drawGameOver(painter: Painter, { state, highscores, nameBuffer, overSaved, isHighScore, now, width, height }: RenderOptions) {
+function drawGameOver(painter: Painter, { state, highscores, nameBuffer, overSaved, isHighScore, isTopScore, scoreRank, now, width, height }: RenderOptions) {
   const askingName = isHighScore && !overSaved
   const cursor = askingName && Math.floor(now / 500) % 2 === 0 ? "_" : " "
   const prompt = askingName ? `Type name: ${nameBuffer}${cursor}` : "Press R to restart or Ctrl+C to quit"
+  const rankBanner = askingName ? (isTopScore ? "NEW HIGH SCORE!" : `Top 10 — rank #${scoreRank}`) : ""
   const lines = [
     "GAME OVER",
     "",
     `Score ${state.score}   Time ${formatTime(state.elapsed)}`,
-    askingName ? "New high score!" : "",
+    rankBanner,
     prompt,
     "",
     "── HIGH SCORES ──",

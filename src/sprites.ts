@@ -9,10 +9,11 @@ export const PLAYER_SHIELD_SPRITE = [
 
 export const DROP_SPRITES = {
   gun: ["▟█▙"],
-  rapid: ["▟▙", "▜▛"],
+  rapid: ["▌▌▌"],
   shield: ["◖█◗"],
   spread: ["╲█╱"],
   triple: ["▌█▐"],
+  pierce: ["▶█▶"],
   life: ["♥"],
 } as const
 
@@ -20,6 +21,18 @@ export const SCOUT_SPRITES = [
   ["▄▀▀▄", "█__█", "▝▀▀▘"],
   ["▟▀▀▙", "█__█", " ▀▀ "],
   ["▗▄▄▖", "▟__▙", "▝▀▀▘"],
+]
+
+// Sniper: slim ship with a long targeting prong; fires aimed shots
+export const SNIPER_SPRITES = [
+  [" ▗█▖ ", " ▟█▙ ", "▝███▘", "  ▼  "],
+  ["  █  ", " ▟█▙ ", "▝▀█▀▘", "  ▼  "],
+]
+
+// Burster: wide, multi-barreled chunky ship; fires 3-shot bursts
+export const BURSTER_SPRITES = [
+  ["▄▀█▀▀█▀▄", "█_█__█_█", "▝▀▀▀▀▀▀▘"],
+  ["▗▄█▀▀█▄▖", "█▀█__█▀█", "▝▀▀▀▀▀▀▘"],
 ]
 
 export const BRUISER_SPRITES = [

@@ -2,6 +2,8 @@
 
 A terminal Space Invaders game built with [OpenTUI](https://github.com/anomalyco/opentui).
 
+![TUI Invaders gameplay](docs/screenshot.png)
+
 Features:
 
 - True pixel-art ships via half-block rendering with per-cell colors

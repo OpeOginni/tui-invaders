@@ -27,6 +27,19 @@ export function isHighScore(score: number, highscores: HighScore[]) {
   return score > 0 && (highscores.length < 10 || score > highscores.at(-1)!.score)
 }
 
+export function isTopScore(score: number, highscores: HighScore[]) {
+  return score > 0 && (highscores.length === 0 || score > highscores[0]!.score)
+}
+
+export function rankFor(score: number, highscores: HighScore[]): number {
+  let rank = 1
+  for (const hs of highscores) {
+    if (score > hs.score) return rank
+    rank++
+  }
+  return rank
+}
+
 export async function saveHighScore(name: string, state: GameState, highscores: HighScore[]) {
   const next = [...highscores, { name, score: state.score, seconds: Math.floor(state.elapsed), date: new Date().toISOString() }]
   next.sort((a, b) => b.score - a.score)

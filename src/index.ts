@@ -1,6 +1,6 @@
 import { createCliRenderer, TextRenderable, type KeyEvent } from "@opentui/core"
 import { newGame, resizeGameState, shoot, updateGame } from "./game"
-import { isHighScore, loadHighScores, saveHighScore } from "./highscores"
+import { isHighScore, isTopScore, loadHighScores, rankFor, saveHighScore } from "./highscores"
 import { createStars, draw, type Star } from "./render"
 
 let width = 90
@@ -78,6 +78,8 @@ const tick = setInterval(() => {
     nameBuffer,
     overSaved,
     isHighScore: isHighScore(state.score, highscores),
+    isTopScore: isTopScore(state.score, highscores),
+    scoreRank: rankFor(state.score, highscores),
     stars,
   })
 }, 33)

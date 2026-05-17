@@ -1,0 +1,29 @@
+node_modules
+.DS_Store
+*.tgz
+*.log
+
+# repo metadata
+.git
+.github
+.gitignore
+.editorconfig
+.vscode
+.idea
+
+# dev configs
+tsconfig.json
+bun.lock
+bun.lockb
+
+# test / dev artifacts
+coverage
+__tests__
+test
+tests
+*.test.ts
+*.spec.ts
+
+# local data
+.tui-invaders/
+highscores.json
