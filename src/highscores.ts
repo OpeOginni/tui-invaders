@@ -1,6 +1,6 @@
 import { homedir, platform } from "node:os"
 import { join } from "node:path"
-import type { GameState, HighScore } from "./types"
+import type { GameState, HighScore } from "./types.js"
 
 function resolveDataDir() {
   if (platform() === "win32") {

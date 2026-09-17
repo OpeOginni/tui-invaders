@@ -1,13 +1,24 @@
 import { createCliRenderer, TextRenderable, type KeyEvent } from "@opentui/core"
-import { newGame, resizeGameState, shoot, updateGame } from "./game"
-import { isHighScore, isTopScore, loadHighScores, rankFor, saveHighScore } from "./highscores"
-import { createStars, draw, type Star } from "./render"
+import { InvadersGame } from "./embed.js"
+import { parseCliArgs } from "./cli.js"
+
+let options: ReturnType<typeof parseCliArgs>
+try {
+  options = parseCliArgs(process.argv.slice(2))
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error))
+  process.exit(1)
+}
+if (options.help) {
+  console.log("Usage: tui-invaders [--level <number>]\n\n  --level  Start at a specific level (default: 1; Hona: 9)\n  --help   Show this help")
+  process.exit(0)
+}
 
 let width = 90
 let height = 30
 
 const renderer = await createCliRenderer({ exitOnCtrlC: true, targetFps: 30, consoleMode: "disabled", useKittyKeyboard: { events: true } })
-renderer.setTerminalTitle("TUI Invaders | Level 1")
+renderer.setTerminalTitle(`TUI Invaders | Level ${options.level}`)
 
 width = Math.max(60, rendererWidth())
 height = Math.max(24, rendererHeight())
@@ -16,41 +27,15 @@ const canvas = new TextRenderable(renderer, { id: "game", width: "100%", height:
 renderer.root.add(canvas)
 renderer.start()
 
-let highscores = await loadHighScores()
-let state = newGame(width, height)
-let stars: Star[] = createStars(width, height)
-let nameBuffer = ""
-let overSaved = false
-let lastShot = 0
-let last = performance.now()
-let paused = false
-let moveLeftUntil = 0
-let moveRightUntil = 0
-let moveDirection = 0
-const MOVE_HOLD_MS = 130
-let titleLevel = 1
+const game = await InvadersGame.load(width, height, options.level)
+let titleLevel = options.level
 
 renderer.keyInput.on("keypress", (key: KeyEvent) => {
-  if (state.gameOver) {
-    void handleGameOverInput(key)
-    return
-  }
-
-  if (key.name === "p") paused = !paused
-  if (key.name === "space") lastShot = shoot(state, performance.now(), lastShot)
-  if (key.name === "left" || key.name === "a") {
-    moveDirection = -1
-    moveLeftUntil = performance.now() + MOVE_HOLD_MS
-  }
-  if (key.name === "right" || key.name === "d") {
-    moveDirection = 1
-    moveRightUntil = performance.now() + MOVE_HOLD_MS
-  }
+  void game.press(key)
 })
 
 renderer.keyInput.on("keyrelease", (key: KeyEvent) => {
-  if ((key.name === "left" || key.name === "a") && moveDirection === -1) moveDirection = 0
-  if ((key.name === "right" || key.name === "d") && moveDirection === 1) moveDirection = 0
+  game.release(key)
 })
 
 renderer.on("resize", resizeGame)
@@ -58,62 +43,21 @@ renderer.on("resize", resizeGame)
 const tick = setInterval(() => {
   if (renderer.isDestroyed) return
   const now = performance.now()
-  const dt = Math.min(0.05, (now - last) / 1000)
-  last = now
-
-  if (!paused && !state.gameOver) {
-    const direction = moveDirection || (now < moveRightUntil ? 1 : 0) - (now < moveLeftUntil ? 1 : 0)
-    updateGame(state, dt, now, width, height, direction)
-    updateTitle()
-  }
-
-  draw({
-    canvas,
-    state,
-    highscores,
-    width,
-    height,
-    now,
-    paused,
-    nameBuffer,
-    overSaved,
-    isHighScore: isHighScore(state.score, highscores),
-    isTopScore: isTopScore(state.score, highscores),
-    scoreRank: rankFor(state.score, highscores),
-    stars,
-  })
+  game.step(now)
+  game.draw(canvas, now)
+  updateTitle()
 }, 33)
 
 renderer.on("destroy", () => clearInterval(tick))
 
-async function handleGameOverInput(key: KeyEvent) {
-  if (key.name === "r" && (!isHighScore(state.score, highscores) || overSaved)) {
-    state = newGame(width, height)
-    nameBuffer = ""
-    overSaved = false
-    return
-  }
-
-  if (!isHighScore(state.score, highscores) || overSaved) return
-  if (key.name === "backspace") nameBuffer = nameBuffer.slice(0, -1)
-  else if (key.name === "return" && nameBuffer.trim()) {
-    highscores = await saveHighScore(nameBuffer.trim(), state, highscores)
-    overSaved = true
-  } else if (/^[a-z0-9]$/i.test(key.sequence) && nameBuffer.length < 10) {
-    nameBuffer += key.sequence.toUpperCase()
-  }
-}
-
 function resizeGame() {
-  const oldWidth = width
   width = Math.max(60, rendererWidth())
   height = Math.max(24, rendererHeight())
-  resizeGameState(state, oldWidth, width, height)
-  stars = createStars(width, height)
+  game.resize(width, height)
 }
 
 function updateTitle() {
-  const level = Math.max(1, state.wave)
+  const level = game.level
   if (level === titleLevel) return
   titleLevel = level
   renderer.setTerminalTitle(`TUI Invaders | Level ${level}`)

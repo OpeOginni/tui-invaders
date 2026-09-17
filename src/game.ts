@@ -1,9 +1,11 @@
 import { RGBA } from "@opentui/core"
-import { ORANGE, RED, YELLOW } from "./colors"
+import { ORANGE, RED, YELLOW } from "./colors.js"
+import { GEMINI_METEOR_SPRITE, PROVIDERS, providerForBoss } from "./bosses.js"
+import { BOSS_INTRO_DURATION } from "./cinematic.js"
 import {
   BRUISER_SPRITES,
   BURSTER_SPRITES,
-  DAX_BOSS_FRAMES,
+  bossArt,
   DREADNOUGHT_SPRITES,
   PLAYER_SHIELD_SPRITE,
   PLAYER_SPRITE,
@@ -11,8 +13,8 @@ import {
   SNIPER_SPRITES,
   hitSprite,
   spritesOverlap,
-} from "./sprites"
-import type { BossPattern, Drop, GameState } from "./types"
+} from "./sprites.js"
+import type { BossPattern, Drop, GameState } from "./types.js"
 
 const BOSS_PATTERN_ROTATION: BossPattern[] = ["spread3", "aimed", "rapidCenter", "wide5", "burst"]
 
@@ -44,9 +46,10 @@ function upgradeGun(state: GameState) {
   }
 }
 
-export function newGame(width: number, height: number): GameState {
+export function newGame(width: number, height: number, startLevel = 1): GameState {
+  if (!Number.isSafeInteger(startLevel) || startLevel < 1) throw new Error("Starting level must be a positive whole number.")
   return {
-    player: { x: Math.floor(width / 2), y: height - 5, hp: 3, shieldUntil: 0 },
+    player: { x: Math.floor(width / 2), y: height - 6, hp: 3, shieldUntil: 0 },
     bullets: [],
     enemies: [],
     drops: [],
@@ -62,7 +65,10 @@ export function newGame(width: number, height: number): GameState {
     tripleUntil: 0,
     pierceUntil: 0,
     lifeDroppedThisWave: false,
-    wave: 0,
+    dropsThisWave: 0,
+    killsSinceDrop: 0,
+    lastDropAt: -Infinity,
+    wave: startLevel - 1,
     waveDirection: 1,
     waveOffsetX: 0,
     waveOffsetY: 0,
@@ -76,10 +82,27 @@ export function updateGame(state: GameState, dt: number, now: number, width: num
   state.elapsed = (now - state.start) / 1000
   const difficulty = 1 + state.elapsed / 60
 
+  if (state.enemies.length === 0) spawnWave(state, width, height)
+  if (state.bossIntro) {
+    // The automatic reveal must not consume the player's remaining boost time.
+    const frozenMs = Math.max(0, dt) * 1000
+    for (const key of ["rapidUntil", "spreadUntil", "tripleUntil", "pierceUntil"] as const) {
+      if (state[key] > now - frozenMs) state[key] += frozenMs
+    }
+    if (state.player.shieldUntil > now - frozenMs) state.player.shieldUntil += frozenMs
+    state.bossIntro.remaining -= dt
+    if (state.bossIntro.remaining <= 0) {
+      state.bossIntro = undefined
+      const boss = state.enemies.find((enemy) => enemy.isBoss && enemy.provider && enemy.backupCalled && enemy.hp > 0)
+      if (boss) {
+        summonEscorts(state, boss, width, height)
+        boss.fireCd = Math.max(boss.fireCd, 1.2)
+      }
+    }
+    return
+  }
   state.player.x = clamp(state.player.x + direction * 32 * dt, 4, width - 5)
-
-  if (state.enemies.length === 0) spawnWave(state, width)
-  updateWave(state, dt, difficulty)
+  updateWave(state, dt, difficulty, width, height)
 
   for (const bullet of state.bullets) {
     bullet.y += bullet.dy * dt
@@ -99,6 +122,26 @@ export function updateGame(state: GameState, dt: number, now: number, width: num
   state.particles = state.particles.filter((p) => p.ttl > 0)
   if (state.player.hp <= 0) state.gameOver = true
   if (anyEnemyAtPlayerLine(state, height)) state.gameOver = true
+  if (!state.gameOver) {
+    // A surviving hit primes a Gemini dive. Queue damaged stars one at a time.
+    if (!state.enemies.some((enemy) => enemy.meteorPhase)) {
+      const star = state.enemies.find((enemy) => !enemy.isBoss && enemy.provider === "gemini" && enemy.hp < enemy.maxHp)
+      if (star) {
+        star.meteorPhase = "warning"
+        star.meteorCd = 1.1
+      }
+    }
+    const boss = state.enemies.find((enemy) => enemy.isBoss && enemy.provider && !enemy.backupCalled && enemy.hp <= enemy.maxHp * 0.75)
+    if (boss) {
+      boss.backupCalled = true
+      const operation = PROVIDERS[boss.provider!]
+      state.bossIntro = {
+        bossName: boss.bossCharacter === "hona" ? "LUKE" : "DAX",
+        title: operation.title, tagline: operation.tagline, tip: operation.tip,
+        remaining: BOSS_INTRO_DURATION,
+      }
+    }
+  }
 }
 
 /**
@@ -116,6 +159,7 @@ export function updateGame(state: GameState, dt: number, now: number, width: num
  *   8 | 3 forward, pierce |   5    | three barrels + pierce 1
  */
 export function shoot(state: GameState, now: number, lastShot: number) {
+  if (state.bossIntro) return lastShot
   const rapid = now < state.rapidUntil
   const pierceTemp = now < state.pierceUntil
   const lvl = state.gunLevel
@@ -180,8 +224,14 @@ export function resizeGameState(state: GameState, oldWidth: number, width: numbe
   state.player.x = clamp((state.player.x / oldWidth) * width, 2, width - 4)
   state.player.y = height - 6
   for (const enemy of state.enemies) {
+    if (enemy.isBoss) {
+      const frame = Math.max(0, enemy.frames?.indexOf(enemy.sprite) ?? 0)
+      enemy.frames = bossArt(enemy.bossCharacter, height).frames
+      enemy.sprite = enemy.frames[frame]!
+    }
+    if (enemy.provider && !enemy.isBoss) enemy.baseY = Math.min(enemy.baseY, height - 8 - enemy.sprite.length)
     enemy.baseX = clamp((enemy.baseX / oldWidth) * width, 2, width - 4)
-    enemy.x = enemy.baseX + state.waveOffsetX
+    enemy.x = enemy.provider && !enemy.isBoss ? enemy.baseX : enemy.baseX + state.waveOffsetX
   }
   for (const bullet of state.bullets) bullet.x = clamp((bullet.x / oldWidth) * width, 1, width - 2)
   for (const drop of state.drops) drop.x = clamp((drop.x / oldWidth) * width, 1, width - 2)
@@ -200,15 +250,18 @@ export function currentPlayerTopY(state: GameState, now: number) {
   return now < state.player.shieldUntil ? state.player.y - 1 : state.player.y
 }
 
-function spawnWave(state: GameState, width: number) {
+function spawnWave(state: GameState, width: number, height: number) {
   state.wave += 1
   state.waveDirection = 1
   state.waveOffsetX = 0
   state.waveOffsetY = 0
   state.lifeDroppedThisWave = false
+  state.dropsThisWave = 0
+  state.killsSinceDrop = 0
+  state.bossIntro = undefined
 
-  if (state.wave % 5 === 0) {
-    spawnBoss(state, width)
+  if (state.wave % 3 === 0) {
+    spawnBoss(state, width, height)
     return
   }
 
@@ -261,12 +314,15 @@ function pickEnemy(wave: number, row: number, col: number) {
   return { sprite: randomFrom(SCOUT_SPRITES), hp: 1, points: 25, fireType: "standard" as const }
 }
 
-function spawnBoss(state: GameState, width: number) {
-  const bossLevel = Math.floor(state.wave / 5) - 1
+function spawnBoss(state: GameState, width: number, height: number) {
+  const bossLevel = Math.floor(state.wave / 3) - 1
   const pattern = BOSS_PATTERN_ROTATION[bossLevel % BOSS_PATTERN_ROTATION.length]!
-  const hp = 50 + state.wave * 6
+  const hp = 90 + state.wave * 10 + bossLevel * 25
+  const provider = providerForBoss(bossLevel)
   const baseX = Math.floor(width / 2)
   const baseY = 3
+  const bossCharacter = bossLevel === 2 ? "hona" : "dax"
+  const frames = bossArt(bossCharacter, height).frames
   state.enemies.push({
     x: baseX,
     y: baseY,
@@ -275,32 +331,39 @@ function spawnBoss(state: GameState, width: number) {
     hp,
     maxHp: hp,
     speed: 0,
-    sprite: DAX_BOSS_FRAMES[0]!,
-    frames: DAX_BOSS_FRAMES,
+    sprite: frames[0]!,
+    frames,
     points: 1500,
     fireCd: 1.5,
     isBoss: true,
     name: bossNameFor(bossLevel),
     bossPattern: pattern,
+    bossCharacter,
+    provider,
+    summonCd: 2.5,
+    rewardDamage: 0,
   })
   recomputeWaveSwing(state, width)
 }
 
 function bossNameFor(bossLevel: number) {
+  if (bossLevel === 1) return "DAX"
+  if (bossLevel === 2) return "LUKE / HONA"
   const labels = ["DAX", "DAX // AIMED", "DAX // RAPID", "DAX // SPREAD-5", "DAX // BURST"]
   return labels[bossLevel % labels.length]!
 }
 
 function recomputeWaveSwing(state: GameState, width: number) {
-  if (state.enemies.length === 0) return
+  const formation = state.enemies.filter((enemy) => !enemy.provider || enemy.isBoss)
+  if (formation.length === 0) return
   const halfSprite = (sprite: string[]) => Math.max(...sprite.map((line) => line.length)) / 2
-  const minBaseLeft = Math.min(...state.enemies.map((e) => e.baseX - halfSprite(e.sprite)))
-  const maxBaseRight = Math.max(...state.enemies.map((e) => e.baseX + halfSprite(e.sprite)))
+  const minBaseLeft = Math.min(...formation.map((e) => e.baseX - halfSprite(e.sprite)))
+  const maxBaseRight = Math.max(...formation.map((e) => e.baseX + halfSprite(e.sprite)))
   state.waveSwingMin = 2 - minBaseLeft
   state.waveSwingMax = width - 2 - maxBaseRight
 }
 
-function updateWave(state: GameState, dt: number, difficulty: number) {
+function updateWave(state: GameState, dt: number, difficulty: number, width: number, height: number) {
   const wave = state.wave
   const speedBase = 3.5
   const speedFromWave = Math.max(0, wave - 5) * 0.55
@@ -313,14 +376,37 @@ function updateWave(state: GameState, dt: number, difficulty: number) {
 
   if (shouldDrop) {
     state.waveDirection *= -1
-    state.waveOffsetY += 1
+    // Boss arenas stay airborne: tougher fights must still fit short terminals.
+    if (wave % 3 !== 0) state.waveOffsetY += 1
   } else {
     state.waveOffsetX = nextOffset
   }
 
+  const escorts = state.enemies.filter((enemy) => enemy.provider && !enemy.isBoss && enemy.hp > 0 && !enemy.meteorPhase).sort((a, b) => a.x - b.x)
   for (const enemy of state.enemies) {
-    enemy.x = enemy.baseX + state.waveOffsetX
-    enemy.y = enemy.baseY + state.waveOffsetY
+    if (enemy.meteorPhase) {
+      updateMeteor(enemy, dt, width, height)
+      continue
+    }
+    if (enemy.provider && !enemy.isBoss) {
+      const halfWidth = Math.ceil(Math.max(...enemy.sprite.map((row) => row.length)) / 2)
+      const lane = escorts.indexOf(enemy)
+      const laneWidth = (width - 3) / Math.max(1, escorts.length)
+      const left = 1 + lane * laneWidth + halfWidth
+      const right = Math.max(left, 1 + (lane + 1) * laneWidth - halfWidth)
+      if (enemy.x <= left) enemy.patrolDirection = 1
+      if (enemy.x >= right) enemy.patrolDirection = -1
+      const step = (7 + wave * 0.2) * dt
+      // When another escort dies, smoothly travel into the newly expanded lane.
+      const target = (enemy.patrolDirection ?? 1) > 0 ? right : left
+      enemy.x += clamp(target - enemy.x, -step, step)
+      enemy.x = clamp(enemy.x, halfWidth + 1, width - halfWidth - 2)
+      enemy.baseX = enemy.x
+      enemy.y = Math.min(enemy.baseY, height - 8 - enemy.sprite.length)
+    } else {
+      enemy.x = enemy.baseX + state.waveOffsetX
+      enemy.y = enemy.baseY + state.waveOffsetY
+    }
     enemy.fireCd -= dt
     if (enemy.frames && enemy.frames.length > 1) {
       const frame = Math.floor(state.elapsed * 1.5) % enemy.frames.length
@@ -328,15 +414,94 @@ function updateWave(state: GameState, dt: number, difficulty: number) {
     }
   }
 
+  const boss = state.enemies.find((enemy) => enemy.isBoss && enemy.provider && enemy.backupCalled)
+  if (boss) {
+    boss.summonCd = (boss.summonCd ?? 0) - dt
+    if (boss.summonCd <= 0) summonEscorts(state, boss, width, height)
+  }
+
   const shooters = activeShooters(state)
   const fireChance = Math.min(0.6, 0.08 + Math.max(0, wave - 2) * 0.018 + difficulty * 0.01)
   for (const enemy of shooters) {
+    if (enemy.hp <= 0 || enemy.meteorPhase) continue
     if (enemy.isBoss) {
       fireBossPattern(state, enemy)
       continue
     }
     if (enemy.fireCd > 0) continue
+    if (enemy.provider) {
+      fireEscort(state, enemy)
+      continue
+    }
     fireEnemy(state, enemy, fireChance, difficulty)
+  }
+}
+
+function updateMeteor(enemy: GameState["enemies"][number], dt: number, width: number, height: number) {
+  if (enemy.meteorPhase === "warning") {
+    enemy.meteorCd = (enemy.meteorCd ?? 0) - dt
+    if (enemy.meteorCd <= 0) {
+      // Grow upwards so the larger hitbox never jumps towards the player.
+      enemy.y += enemy.sprite.length - GEMINI_METEOR_SPRITE.length
+      enemy.sprite = GEMINI_METEOR_SPRITE
+      enemy.x = clamp(enemy.x, 10, width - 11)
+      enemy.baseX = enemy.x
+      enemy.meteorPhase = "falling"
+    }
+    return
+  }
+  enemy.y += 9 * dt
+  if (enemy.y >= height - 1) enemy.hp = 0
+}
+
+function summonEscorts(state: GameState, boss: GameState["enemies"][number], width: number, height: number) {
+  boss.summonCd = boss.provider === "gemini" ? 5.5 : 9
+  const escorts = state.enemies.filter((enemy) => enemy.provider && !enemy.isBoss)
+  const provider = boss.provider!
+  const sprite = PROVIDERS[provider].sprite
+  const halfWidth = Math.ceil(Math.max(...sprite.map((row) => row.length)) / 2)
+  // Refill the squad while the boss lives; shared pickup budgets prevent farming.
+  const limit = provider === "gemini" ? 4 : 3
+  const available = Math.max(0, limit - escorts.length)
+  for (let slot = 0; slot < available; slot++) {
+    const lanes = Array.from({ length: limit }, (_, lane) => clamp(Math.round(width * (lane + 0.5) / limit), halfWidth + 1, width - halfWidth - 2))
+    // Choose the largest opening so replacements do not stack on a survivor.
+    const baseX = lanes.sort((a, b) => {
+      const distance = (x: number) => Math.min(...escorts.map((enemy) => Math.abs(enemy.x - x)), width)
+      return distance(b) - distance(a)
+    })[0]!
+    const baseY = Math.min(boss.y + boss.sprite.length + 1, height - 8 - sprite.length)
+    const hp = provider === "gemini" ? 10 + Math.floor(state.wave / 3) : 3 + Math.floor(state.wave / 6)
+    const escort: GameState["enemies"][number] = {
+      x: baseX, y: baseY, baseX, baseY, hp, maxHp: hp, speed: 0,
+      sprite, provider, patrolDirection: slot % 2 === 0 ? 1 : -1, points: 100, fireCd: 1.2 + slot * 0.35,
+    }
+    state.enemies.push(escort)
+    escorts.push(escort)
+  }
+}
+
+function fireEscort(state: GameState, enemy: GameState["enemies"][number]) {
+  const x = Math.round(enemy.x)
+  const y = Math.round(enemy.y + enemy.sprite.length)
+  const fire = (offset: number, dx: number, dy: number) => {
+    state.bullets.push({ x: x + offset, y, dx, dy, damage: 1, friendly: false })
+  }
+  switch (enemy.provider) {
+    case "deepseek":
+      // Two cheap tokens converge below the whale, then cross.
+      fire(-3, 4, 11)
+      fire(3, -4, 11)
+      enemy.fireCd = 2.8
+      break
+    case "gemini": {
+      const split = (enemy.burstCount ?? 0) % 2 === 0
+      fire(-2, split ? -5 : 5, 13)
+      fire(2, split ? 5 : -5, 13)
+      enemy.burstCount = (enemy.burstCount ?? 0) + 1
+      enemy.fireCd = 2.6
+      break
+    }
   }
 }
 
@@ -389,6 +554,17 @@ function fireBossPattern(state: GameState, boss: GameState["enemies"][number]) {
   const baseX = Math.round(boss.x)
   const baseY = Math.round(boss.y + boss.sprite.length)
   const playerX = state.player.x
+  if (boss.bossCharacter === "hona") {
+    // Each direction fires once in a random order, followed by a return-fire window.
+    if (!boss.spreadQueue?.length) boss.spreadQueue = [-1, 0, 1]
+    const index = Math.floor(Math.random() * boss.spreadQueue.length)
+    const dx = boss.spreadQueue.splice(index, 1)[0]! * 8
+    for (const offset of [-3, 3]) {
+      state.bullets.push({ x: baseX + offset, y: baseY, dx, dy: 18, damage: 1, friendly: false })
+    }
+    boss.fireCd = boss.spreadQueue.length === 0 ? 2.2 : 0.3
+    return
+  }
   switch (boss.bossPattern) {
     case "aimed": {
       // 3-shot aimed burst with a long rest in between so player can reposition.
@@ -431,10 +607,11 @@ function fireBossPattern(state: GameState, boss: GameState["enemies"][number]) {
     }
     case "spread3":
     default: {
-      state.bullets.push({ x: baseX, y: baseY, dy: 14, damage: 1, friendly: false })
-      state.bullets.push({ x: baseX - 4, y: baseY, dx: -8, dy: 12, damage: 1, friendly: false })
-      state.bullets.push({ x: baseX + 4, y: baseY, dx: 8, dy: 12, damage: 1, friendly: false })
-      boss.fireCd = 1.6
+      if (!boss.spreadQueue?.length) boss.spreadQueue = [-1, 0, 1]
+      const index = Math.floor(Math.random() * boss.spreadQueue.length)
+      const lane = boss.spreadQueue.splice(index, 1)[0]!
+      state.bullets.push({ x: baseX + lane * 4, y: baseY, dx: lane * 8, dy: lane === 0 ? 14 : 12, damage: 1, friendly: false })
+      boss.fireCd = boss.spreadQueue.length > 0 ? 0.45 : 1.6
       return
     }
   }
@@ -443,6 +620,7 @@ function fireBossPattern(state: GameState, boss: GameState["enemies"][number]) {
 function anyEnemyAtPlayerLine(state: GameState, height: number) {
   const ground = height - 2
   for (const enemy of state.enemies) {
+    if (enemy.meteorPhase === "falling") continue
     const bottom = enemy.y + enemy.sprite.length
     if (bottom >= ground || bottom >= state.player.y - 1) return true
   }
@@ -454,14 +632,30 @@ function collide(state: GameState, now: number, height: number) {
   for (const bullet of state.bullets) {
     if (bullet.friendly) {
       for (const enemy of state.enemies) {
-        if (bullet.hitEnemies?.has(enemy)) continue
+        if (enemy.hp <= 0 || bullet.hitEnemies?.has(enemy)) continue
+        // Once wounded, a Gemini star is guaranteed to complete its warning
+        // and begin the dive. It becomes shootable again while falling.
+        if (enemy.meteorPhase === "warning" && hitSprite(bullet.x, bullet.y, enemy.x, enemy.y, enemy.sprite)) {
+          bullet.y = -99
+          continue
+        }
         if (hitSprite(bullet.x, bullet.y, enemy.x, enemy.y, enemy.sprite)) {
           enemy.hp -= bullet.damage
+          if (enemy.isBoss && enemy.hp > 0) {
+            enemy.rewardDamage = (enemy.rewardDamage ?? 0) + bullet.damage
+            if (enemy.rewardDamage >= Math.max(6, Math.floor(enemy.maxHp * 0.07))) {
+              enemy.rewardDamage = 0
+              maybeDrop(state, enemy.x, enemy.y + enemy.sprite.length, now, true)
+            }
+          }
           burst(state, enemy.x, enemy.y, enemy.hp <= 0 ? ORANGE : YELLOW)
           if (enemy.hp <= 0) {
             state.score += enemy.points
-            if (enemy.isBoss) bigExplosion(state, enemy.x, enemy.y + enemy.sprite.length / 2)
-            else maybeDrop(state, enemy.x, enemy.y)
+            if (enemy.isBoss) {
+              bigExplosion(state, enemy.x, enemy.y + enemy.sprite.length / 2)
+              destroyEscorts(state)
+            }
+            else maybeDrop(state, enemy.x, enemy.y, now)
           }
           if (bullet.pierce && bullet.pierce > 0) {
             bullet.pierce -= 1
@@ -481,8 +675,10 @@ function collide(state: GameState, now: number, height: number) {
   }
 
   for (const enemy of state.enemies) {
+    if (enemy.hp <= 0) continue
     if (spritesOverlap(enemy.x, enemy.y, enemy.sprite, state.player.x, currentPlayerTopY(state, now), currentPlayerSprite(state, now))) {
       enemy.hp = 0
+      if (enemy.isBoss) destroyEscorts(state)
       if (now > state.player.shieldUntil) state.player.hp -= 1
       burst(state, state.player.x, state.player.y, RED)
     }
@@ -503,6 +699,14 @@ function collide(state: GameState, now: number, height: number) {
   }
 }
 
+function destroyEscorts(state: GameState) {
+  for (const escort of state.enemies) {
+    if (!escort.provider || escort.isBoss || escort.hp <= 0) continue
+    escort.hp = 0
+    burst(state, escort.x, escort.y, ORANGE)
+  }
+}
+
 // Weighted drop pool: pierce is intentionally rare; others share evenly.
 const DROP_WEIGHTS: Array<[Drop["kind"], number]> = [
   ["gun", 4],
@@ -513,26 +717,51 @@ const DROP_WEIGHTS: Array<[Drop["kind"], number]> = [
   ["pierce", 1],
 ]
 
-function pickDropKind(): Drop["kind"] {
-  const total = DROP_WEIGHTS.reduce((sum, [, w]) => sum + w, 0)
+function activeDrop(state: GameState, kind: Drop["kind"], now: number) {
+  switch (kind) {
+    case "rapid": return now < state.rapidUntil
+    case "spread": return now < state.spreadUntil
+    case "triple": return now < state.tripleUntil
+    case "pierce": return now < state.pierceUntil
+    case "shield": return now < state.player.shieldUntil
+    case "gun": return state.gunLevel >= GUN_MAX_LEVEL
+    case "life": return state.player.hp >= 3 || state.lifeDroppedThisWave
+  }
+}
+
+function pickDropKind(state: GameState, now: number): Drop["kind"] | undefined {
+  const pool = DROP_WEIGHTS.filter(([kind]) => !activeDrop(state, kind, now) && !state.drops.some((drop) => drop.ttl > 0 && drop.kind === kind))
+  if (!activeDrop(state, "life", now) && !state.drops.some((drop) => drop.kind === "life") && Math.random() < (state.player.hp === 1 ? 0.08 : 0.03)) return "life"
+  const total = pool.reduce((sum, [, w]) => sum + w, 0)
   let r = Math.random() * total
-  for (const [kind, w] of DROP_WEIGHTS) {
+  for (const [kind, w] of pool) {
     r -= w
     if (r <= 0) return kind
   }
-  return "gun"
+  return undefined
 }
 
-function maybeDrop(state: GameState, x: number, y: number) {
-  const roll = Math.random()
-  if (roll > 0.22) return
-  // life is very rare (~0.8%) and capped at one per wave
-  if (roll < 0.008 && !state.lifeDroppedThisWave) {
-    state.drops.push({ x, y, kind: "life", ttl: 12 })
-    state.lifeDroppedThisWave = true
-    return
-  }
-  state.drops.push({ x, y, kind: pickDropKind(), ttl: 10 })
+function maybeDrop(state: GameState, x: number, y: number, now: number, bossHit = false) {
+  if (!bossHit) state.killsSinceDrop += 1
+  const bossWave = state.wave % 3 === 0
+  const budget = bossWave ? 6 : Math.min(4, 2 + Math.floor(state.wave / 4))
+  const cooldown = bossWave ? 3 : 4
+  if (state.dropsThisWave >= budget || state.elapsed - state.lastDropAt < cooldown) return
+  if (state.drops.filter((drop) => drop.ttl > 0).length >= 2) return
+
+  const armed = ["rapid", "spread", "triple", "pierce"].some((kind) => activeDrop(state, kind as Drop["kind"], now))
+  const baseChance = bossWave ? (armed ? 0.15 : 0.25) : (armed ? 0.08 : 0.14)
+  // Dry streaks gently improve the odds; an already boosted player needs less help.
+  const chance = bossHit ? (armed ? 0.55 : 0.9)
+    : Math.min(bossWave ? 0.5 : 0.38, baseChance + Math.max(0, state.killsSinceDrop - 3) * 0.025)
+  if (Math.random() >= chance) return
+  const kind = pickDropKind(state, now)
+  if (!kind) return
+  state.drops.push({ x, y, kind, ttl: 12 })
+  state.dropsThisWave += 1
+  state.killsSinceDrop = 0
+  state.lastDropAt = state.elapsed
+  if (kind === "life") state.lifeDroppedThisWave = true
 }
 
 function burst(state: GameState, x: number, y: number, color: typeof RED) {
@@ -588,7 +817,7 @@ function activeShooters(state: GameState) {
   const bottom = new Map<number, (typeof state.enemies)[number]>()
   const specials: (typeof state.enemies)[number][] = []
   for (const enemy of state.enemies) {
-    if (enemy.isBoss) {
+    if (enemy.isBoss || enemy.provider) {
       specials.push(enemy)
       continue
     }

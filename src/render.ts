@@ -1,7 +1,9 @@
 import { RGBA, StyledText, type TextChunk, type TextRenderable } from "@opentui/core"
-import { currentPlayerSprite, currentPlayerTopY, gunCostToNext } from "./game"
-import { DAX_BOSS_FRAMES, DAX_PIXEL_FRAMES, DROP_SPRITES } from "./sprites"
-import type { GameState, HighScore } from "./types"
+import { currentPlayerSprite, currentPlayerTopY, gunCostToNext } from "./game.js"
+import { DEEPSEEK_WHALE_PIXELS, GEMINI_COLORS, GEMINI_ICON_PIXELS, GEMINI_METEOR_PIXELS, GEMINI_STAR_PIXELS, PROVIDERS } from "./bosses.js"
+import { arcadeText, BOSS_INTRO_DURATION, introCoverage } from "./cinematic.js"
+import { bossArt, DROP_SPRITES } from "./sprites.js"
+import type { GameState, HighScore } from "./types.js"
 
 type Tone =
   | "space"
@@ -20,6 +22,8 @@ type Tone =
   | "dangerBright"
   | "dangerTrail"
   | "boost"
+  | "deepseek"
+  | "gemini"
 
 type Cell = { char: string; fg: RGBA; bg: RGBA }
 
@@ -40,6 +44,8 @@ const PALETTE: Record<Tone, RGBA> = {
   dangerBright: RGBA.fromHex("#ff2030"),
   dangerTrail: RGBA.fromHex("#a02838"),
   boost: RGBA.fromHex("#ffe66d"),
+  deepseek: RGBA.fromHex("#559dff"),
+  gemini: RGBA.fromHex("#b29aff"),
 }
 
 const SPACE_BG = PALETTE.space
@@ -59,6 +65,22 @@ const DAX_COLORS: Record<string, RGBA> = {
   T: RGBA.fromHex("#10131a"), // shirt dark
   t: RGBA.fromHex("#1d232f"), // shirt highlight
 }
+
+const HONA_COLORS: Record<string, RGBA> = {
+  H: RGBA.fromHex("#295676"),
+  O: RGBA.fromHex("#ef4271"),
+  N: RGBA.fromHex("#ffd568"),
+  A: RGBA.fromHex("#00cca1"),
+}
+
+const WHALE_COLORS: Record<string, RGBA> = {
+  B: RGBA.fromHex("#4d6bfe"),
+  L: RGBA.fromHex("#8ba6ff"),
+  D: RGBA.fromHex("#3046b5"),
+  W: RGBA.fromHex("#d7ebff"),
+}
+
+const GEMINI_FLARE_COLORS = Object.fromEntries(Object.keys(GEMINI_COLORS).map((key) => [key, PALETTE.starBright]))
 
 export type RenderOptions = {
   canvas: TextRenderable
@@ -95,7 +117,6 @@ export function draw(options: RenderOptions) {
   const painter = new Painter(options.width, options.height)
   drawStars(painter, options.stars, options.now)
   painter.drawFrame()
-  drawHud(painter, options)
 
   for (const drop of options.state.drops) painter.drawSprite(DROP_SPRITES[drop.kind], Math.round(drop.x), Math.round(drop.y), dropTone(drop.kind))
   for (const bullet of options.state.bullets) {
@@ -111,19 +132,40 @@ export function draw(options: RenderOptions) {
     }
   }
   for (const enemy of options.state.enemies) {
-    if (enemy.isBoss && enemy.frames === DAX_BOSS_FRAMES) {
-      const frameIdx = Math.max(0, enemy.frames.indexOf(enemy.sprite))
-      const pixelFrame = DAX_PIXEL_FRAMES[frameIdx] ?? DAX_PIXEL_FRAMES[0]!
-      painter.drawPixelArt(pixelFrame, DAX_COLORS, Math.round(enemy.x), Math.round(enemy.y))
+    if (enemy.isBoss) {
+      const frameIdx = Math.max(0, enemy.frames?.indexOf(enemy.sprite) ?? 0)
+      const { pixels } = bossArt(enemy.bossCharacter, options.height)
+      const pixelFrame = pixels[frameIdx] ?? pixels[0]!
+      painter.drawPixelArt(pixelFrame, enemy.bossCharacter === "hona" ? HONA_COLORS : DAX_COLORS, Math.round(enemy.x), Math.round(enemy.y))
       drawBossBar(painter, enemy, options.width)
+    } else if (enemy.provider === "deepseek") {
+      painter.drawPixelArt(DEEPSEEK_WHALE_PIXELS, WHALE_COLORS, Math.round(enemy.x), Math.round(enemy.y))
+    } else if (enemy.provider === "gemini") {
+      const x = Math.round(enemy.x)
+      const y = Math.round(enemy.y)
+      const falling = enemy.meteorPhase === "falling"
+      const flare = enemy.meteorPhase === "warning" && Math.floor((enemy.meteorCd ?? 0) * 6) % 2 === 0
+      if (falling) {
+        for (let trail = 1; trail <= 4; trail++) {
+          painter.drawText("│", x, y - trail, trail < 3 ? "gemini" : "dim")
+          if (trail < 3) painter.drawText("╎   ╎", x - 2, y - trail, "dim")
+        }
+      }
+      if (enemy.meteorPhase === "warning") {
+        painter.drawText("▼", x, y + enemy.sprite.length, "boost")
+      }
+      painter.drawPixelArt(falling ? GEMINI_METEOR_PIXELS : GEMINI_STAR_PIXELS, flare ? GEMINI_FLARE_COLORS : GEMINI_COLORS, x, y)
     } else {
-      const tone: Tone = enemy.hp > 3 ? "heavy" : "enemy"
+      const tone: Tone = enemy.provider ?? (enemy.hp > 3 ? "heavy" : "enemy")
       painter.drawLogoSprite(enemy.sprite, Math.round(enemy.x), Math.round(enemy.y), tone)
     }
   }
   for (const p of options.state.particles) painter.drawTextRaw(p.glyph, Math.round(p.x), Math.round(p.y), p.color)
 
   painter.drawLogoSprite(currentPlayerSprite(options.state, options.now), Math.round(options.state.player.x), Math.round(currentPlayerTopY(options.state, options.now)), "player")
+  drawHud(painter, options)
+
+  if (options.state.bossIntro && !options.state.gameOver) drawBossIntro(painter, options)
 
   if (options.paused && !options.state.gameOver) drawPauseDialog(painter, options.width, options.height)
   if (options.state.gameOver) drawGameOver(painter, options)
@@ -170,6 +212,12 @@ class Painter {
     this.put(this.width - 1, 0, "┓", "frame")
     this.put(0, this.height - 1, "┗", "frame")
     this.put(this.width - 1, this.height - 1, "┛", "frame")
+  }
+
+  overlayRows(overlay: Painter, top: number, bottom: number) {
+    for (let y = Math.max(0, top); y < Math.min(this.height, bottom); y++) {
+      this.screen[y] = overlay.screen[y]!
+    }
   }
 
   drawText(text: string, x: number, y: number, tone: Tone = "hud") {
@@ -286,7 +334,7 @@ class Painter {
 }
 
 function drawBossBar(painter: Painter, enemy: GameState["enemies"][number], width: number) {
-  const label = `── BOSS: ${enemy.name ?? "???"} ──`
+  const label = `── ${enemy.provider && enemy.backupCalled ? `${enemy.name} // ${PROVIDERS[enemy.provider].title}` : `BOSS: ${enemy.name ?? "???"}`} ──`
   const barWidth = Math.min(40, width - 8)
   const left = Math.floor((width - barWidth) / 2)
   const ratio = Math.max(0, enemy.hp / Math.max(1, enemy.maxHp))
@@ -299,15 +347,13 @@ function drawBossBar(painter: Painter, enemy: GameState["enemies"][number], widt
 
 function drawHud(painter: Painter, { state, highscores, width, height, now }: RenderOptions) {
   const hi = highscores[0]
-  const boosts = [
-    now < state.rapidUntil ? "RAPID" : "",
-    now < state.spreadUntil ? "SPREAD" : "",
-    now < state.tripleUntil ? "TRIPLE" : "",
-    now < state.pierceUntil ? "PIERCE" : "",
-    now < state.player.shieldUntil ? "SHIELD" : "",
+  const boosts: Array<[keyof typeof DROP_SPRITES, number]> = [
+    ["rapid", state.rapidUntil],
+    ["spread", state.spreadUntil],
+    ["triple", state.tripleUntil],
+    ["pierce", state.pierceUntil],
+    ["shield", state.player.shieldUntil],
   ]
-    .filter(Boolean)
-    .join(" | ")
   painter.drawText(` Level ${state.wave}`, 2, 0, "boost")
   const a = `  Score ${state.score}`
   painter.drawText(a, 11, 0, "hud")
@@ -319,9 +365,85 @@ function drawHud(painter: Painter, { state, highscores, width, height, now }: Re
   const d = next > 0 ? `  Gun Lv.${state.gunLevel} (${state.gunXP}/${next})` : `  Gun Lv.${state.gunLevel} MAX`
   painter.drawText(d, 11 + a.length + b.length + c.length, 0, "player")
   painter.drawText(hi ? `Best ${hi.score} ${hi.name}` : "Best none", width - 24, 0, "boost")
-  if (boosts) painter.drawText(boosts, 3, height - 1, "boost")
-  else painter.drawText("[P] pause", 3, height - 1, "dim")
-  painter.drawText("gun ▟█▙ rapid ▌▌▌ shield ◖█◗ spread ╲█╱ triple ▌█▐ pierce ▶█▶ life ♥", width - 71, height - 1, "drop")
+  const controls = "[P] pause  [Space] shoot"
+  painter.drawText(controls, 3, height - 1, "hud")
+  const legend = ["gun ▟█▙", "rapid ▌▌▌", "shield ◖█◗", "spread ╲█╱", "triple ▌█▐", "pierce ▶█▶", "life ♥"]
+  const legendX = Math.max(3 + controls.length + 3, width - 71)
+  while (legend.length && legend.join(" ").length > width - legendX - 2) legend.pop()
+  painter.drawText(legend.join(" "), legendX, height - 1, "drop")
+
+  let boostX = 3
+  let boostY = height - 2
+  for (const [kind, until] of boosts) {
+    if (now >= until) continue
+    const badge = ` [${kind.toUpperCase()}] `
+    if (boostX + badge.length > width - 2) {
+      boostX = 3
+      boostY -= 1
+    }
+    painter.drawText(badge, boostX, boostY, dropTone(kind))
+    boostX += badge.length + 1
+  }
+}
+
+function drawBossIntro(painter: Painter, { state, width, height }: RenderOptions) {
+  const intro = state.bossIntro!
+  const elapsed = BOSS_INTRO_DURATION - intro.remaining
+  const coverage = introCoverage(intro.remaining)
+  if (coverage <= 0) return
+  const scene = new Painter(width, height)
+  const tone: Tone = state.enemies.find((enemy) => enemy.isBoss)?.provider ?? "boost"
+  const centerX = Math.floor(width / 2)
+  const centerY = Math.floor(height / 2)
+
+  // Layered warp-speed streaks: longer, brighter trails sweep past faster.
+  const streakCount = Math.min(12, Math.max(8, Math.floor(height * 0.3)))
+  for (let i = 0; i < streakCount; i++) {
+    const layer = i % 3
+    const length = 6 + layer * 5 + i % 4
+    const speed = width * (0.65 + layer * 0.45)
+    const x = Math.floor((i * 31 + elapsed * speed) % (width + length)) - length
+    const y = 2 + (i * 7 + Math.floor(i / 3)) % Math.max(1, height - 4)
+    scene.drawText("─".repeat(length), x, y, layer === 0 ? "frame" : "dim")
+    scene.drawText("━━", x + length - 2, y, layer === 2 ? "starBright" : "star")
+  }
+  scene.drawText("━".repeat(width), 0, 1, tone)
+  scene.drawText("━".repeat(width), 0, height - 2, tone)
+
+  const fullTitle = arcadeText(intro.title)
+  const titles = fullTitle[0]!.length <= width - 6
+    ? [intro.title]
+    : intro.title.startsWith("Operation ") ? ["OPERATION", intro.title.slice(10)] : ["GEMINI", "FOR LIFE"]
+  const titleHeight = titles.length * 6 - 1
+  const titleTop = Math.floor((height - titleHeight) / 2)
+  const settle = Math.max(0, 1 - (elapsed - 0.25) / 0.6)
+  for (const [index, title] of titles.entries()) {
+    const rows = arcadeText(title)
+    const slide = Math.round(settle * settle * 8) * (index % 2 === 0 ? -1 : 1)
+    const left = Math.floor((width - rows[0]!.length) / 2) + slide
+    for (const [row, text] of rows.entries()) {
+      scene.drawText(text, left, titleTop + index * 6 + row, index === titles.length - 1 ? tone : "hud")
+    }
+  }
+  const name = `BOSS ${intro.bossName}`
+  scene.drawText(name, Math.floor((width - name.length) / 2), titleTop - 2, "starBright")
+  // A visual signature, rather than another paragraph to read.
+  const emblemY = titleTop + titleHeight + 1
+  if (emblemY + Math.ceil(DEEPSEEK_WHALE_PIXELS.length / 2) < height - 2 && tone === "deepseek") {
+    scene.drawPixelArt(DEEPSEEK_WHALE_PIXELS, WHALE_COLORS, centerX, emblemY)
+  } else if (tone === "gemini") {
+    const pixels = emblemY + GEMINI_STAR_PIXELS.length / 2 <= height - 2 ? GEMINI_STAR_PIXELS : GEMINI_ICON_PIXELS
+    scene.drawPixelArt(pixels, GEMINI_COLORS, centerX, emblemY)
+  } else {
+    scene.drawText("── ◆ ──", centerX - 4, emblemY, tone)
+  }
+
+  const bandHeight = Math.ceil(height * coverage / 2)
+  painter.overlayRows(scene, centerY - bandHeight, centerY + bandHeight + (height % 2))
+  if (coverage < 1) {
+    painter.drawText("━".repeat(width), 0, centerY - bandHeight, tone)
+    painter.drawText("━".repeat(width), 0, centerY + bandHeight - 1, tone)
+  }
 }
 
 function drawPauseDialog(painter: Painter, width: number, height: number) {

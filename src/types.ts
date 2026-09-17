@@ -2,6 +2,8 @@ import type { RGBA } from "@opentui/core"
 
 export type EnemyFireType = "standard" | "aimed" | "burst"
 export type BossPattern = "spread3" | "aimed" | "rapidCenter" | "wide5" | "burst"
+export type Provider = "deepseek" | "gemini"
+export type BossCharacter = "dax" | "hona"
 
 export type Bullet = {
   x: number
@@ -26,10 +28,19 @@ export type Enemy = {
   points: number
   fireCd: number
   burstCount?: number
+  spreadQueue?: number[]
   fireType?: EnemyFireType
   isBoss?: boolean
   name?: string
   bossPattern?: BossPattern
+  bossCharacter?: BossCharacter
+  provider?: Provider
+  backupCalled?: boolean
+  summonCd?: number
+  patrolDirection?: number
+  meteorCd?: number
+  meteorPhase?: "warning" | "falling"
+  rewardDamage?: number
 }
 export type Drop = { x: number; y: number; kind: "gun" | "rapid" | "shield" | "spread" | "triple" | "pierce" | "life"; ttl: number }
 export type Particle = { x: number; y: number; glyph: string; ttl: number; color: RGBA }
@@ -52,6 +63,10 @@ export type GameState = {
   tripleUntil: number
   pierceUntil: number
   lifeDroppedThisWave: boolean
+  dropsThisWave: number
+  killsSinceDrop: number
+  lastDropAt: number
+  bossIntro?: { bossName: string; title: string; tagline: string; tip: string; remaining: number }
   wave: number
   waveDirection: number
   waveOffsetX: number
