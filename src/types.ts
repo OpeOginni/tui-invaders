@@ -38,8 +38,10 @@ export type Enemy = {
   backupCalled?: boolean
   summonCd?: number
   patrolDirection?: number
+  patrolSpeed?: number
   meteorCd?: number
   meteorPhase?: "warning" | "falling"
+  meteorElapsed?: number
   rewardDamage?: number
 }
 export type Drop = { x: number; y: number; kind: "gun" | "rapid" | "shield" | "spread" | "triple" | "pierce" | "life"; ttl: number }

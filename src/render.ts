@@ -80,8 +80,6 @@ const WHALE_COLORS: Record<string, RGBA> = {
   W: RGBA.fromHex("#d7ebff"),
 }
 
-const GEMINI_FLARE_COLORS = Object.fromEntries(Object.keys(GEMINI_COLORS).map((key) => [key, PALETTE.starBright]))
-
 export type RenderOptions = {
   canvas: TextRenderable
   state: GameState
@@ -144,7 +142,6 @@ export function draw(options: RenderOptions) {
       const x = Math.round(enemy.x)
       const y = Math.round(enemy.y)
       const falling = enemy.meteorPhase === "falling"
-      const flare = enemy.meteorPhase === "warning" && Math.floor((enemy.meteorCd ?? 0) * 6) % 2 === 0
       if (falling) {
         for (let trail = 1; trail <= 4; trail++) {
           painter.drawText("│", x, y - trail, trail < 3 ? "gemini" : "dim")
@@ -152,9 +149,14 @@ export function draw(options: RenderOptions) {
         }
       }
       if (enemy.meteorPhase === "warning") {
-        painter.drawText("▼", x, y + enemy.sprite.length, "boost")
+        // Keep the gradient visible; pulse the marker, not the whole star.
+        const pulse = Math.floor((enemy.meteorCd ?? 0) * 6) % 2 === 0
+        painter.drawText("▼", x, y + enemy.sprite.length, pulse ? "dangerBright" : "boost")
+        for (let laneY = y + enemy.sprite.length + 2; laneY < options.state.player.y; laneY += 3) {
+          painter.drawText("┆", x, laneY, "dangerTrail")
+        }
       }
-      painter.drawPixelArt(falling ? GEMINI_METEOR_PIXELS : GEMINI_STAR_PIXELS, flare ? GEMINI_FLARE_COLORS : GEMINI_COLORS, x, y)
+      painter.drawPixelArt(falling ? GEMINI_METEOR_PIXELS : GEMINI_STAR_PIXELS, GEMINI_COLORS, x, y)
     } else {
       const tone: Tone = enemy.provider ?? (enemy.hp > 3 ? "heavy" : "enemy")
       painter.drawLogoSprite(enemy.sprite, Math.round(enemy.x), Math.round(enemy.y), tone)

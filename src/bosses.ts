@@ -29,19 +29,14 @@ function geminiPixels(size: number) {
     { x: 0.5, y: 0.5, rgb: [94, 137, 238] },
   ]
   const center = (size - 1) / 2
-  const halfWidths = Array.from({ length: size }, (_, row) => {
-    const distance = Math.abs(row - center)
-    if (distance === 0) return center
-    const normalized = 1 - distance / center
-    // Preserve the original purple sprite's clean diamond-like taper. At this
-    // resolution it reads as a sparkle more reliably than concave pixel arms.
-    return Math.max(0, Math.round(center * normalized))
-  })
   return Array.from({ length: size }, (_, row) => Array.from({ length: size }, (_, col) => {
     const x = col / (size - 1)
     const y = row / (size - 1)
-    const horizontal = Math.abs(col - center)
-    if (horizontal > halfWidths[row]! + 0.5) return " "
+    // An astroid outline gives four pointed arms with concave sides, not a
+    // filled diamond. A small raster tolerance keeps the tiny arms connected.
+    const horizontal = Math.abs(col - center) / center
+    const vertical = Math.abs(row - center) / center
+    if (horizontal ** (2 / 3) + vertical ** (2 / 3) > 1.1) return " "
     const weights = anchors.map((point) => 1 / (0.008 + (x - point.x) ** 2 + (y - point.y) ** 2) ** 2)
     const total = weights.reduce((sum, weight) => sum + weight, 0)
     const rgb = [0, 1, 2].map((channel) => Math.round(anchors.reduce((sum, point, index) => sum + point.rgb[channel]! * weights[index]!, 0) / total))
@@ -67,7 +62,7 @@ export const PROVIDERS: Record<Provider, { title: string; tagline: string; tip: 
   gemini: {
     title: "Gemini For Life",
     tagline: "The Gemini defense squad has arrived.",
-    tip: "Wounded stars flare, then dive. Dodge the fall!",
+    tip: "Wounded stars mark their lane, then dive. Shots pass through — dodge!",
     sprite: toCollisionFrame(GEMINI_STAR_PIXELS),
   },
 }

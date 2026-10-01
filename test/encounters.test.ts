@@ -97,8 +97,10 @@ describe("boss operations", () => {
     expect(star.meteorPhase).toBe("falling")
     expect(star.sprite).toBe(GEMINI_METEOR_SPRITE)
     expect(star.maxHp).toBeGreaterThanOrEqual(13)
-    expect(star.y + star.sprite.length).toBe(bottom)
-    expect(state.bullets).toHaveLength(0)
+    expect(star.y + star.sprite.length).toBeCloseTo(bottom + 0.0404)
+    expect(star.x).toBe(x)
+    expect(state.bullets).toHaveLength(1) // Warning-phase shots pass through.
+    state.bullets = []
     expect(state.enemies.filter((enemy) => enemy.meteorPhase)).toHaveLength(1)
 
     for (const enemy of state.enemies) if (enemy !== star) enemy.meteorCd = Infinity
@@ -256,7 +258,8 @@ describe("boss operations", () => {
         enemy.meteorCd = Infinity
       }
       const escort = state.enemies[1]!
-      const halfWidth = Math.ceil(Math.max(...escort.sprite.map((row) => row.length)) / 2)
+      const patrolSprite = wave === 9 ? GEMINI_METEOR_SPRITE : escort.sprite
+      const halfWidth = Math.ceil(Math.max(...patrolSprite.map((row) => row.length)) / 2)
       const track = (start: number) => {
         let min = Infinity
         let max = -Infinity
@@ -379,7 +382,7 @@ describe("pickup pacing", () => {
   })
 
   test("dry streaks improve regular-wave odds", () => {
-    const random = spyOn(Math, "random").mockReturnValue(0.23)
+    const random = spyOn(Math, "random").mockReturnValue(0.26)
     try {
       const state = newGame(120, 60)
       updateGame(state, 0, state.start, 120, 60, 0)

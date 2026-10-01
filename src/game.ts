@@ -18,7 +18,8 @@ import type { BossPattern, Drop, GameState } from "./types.js"
 
 const BOSS_PATTERN_ROTATION: BossPattern[] = ["spread3", "aimed", "rapidCenter", "wide5", "burst"]
 
-// Drops needed to advance from level N → N+1. Cool upgrades cost more.
+// Gun XP needed to advance from level N → N+1. Cool upgrades cost more.
+// Pickups give 1 XP; clearing a regular wave gives 1, and a boss gives 2.
 //  L1→L2 damage++         : 1
 //  L2→L3 two-shot         : 2
 //  L3→L4 damage++         : 2
@@ -34,16 +35,33 @@ export function gunCostToNext(level: number) {
   return GUN_LEVEL_COSTS[level - 1] ?? 0
 }
 
-function upgradeGun(state: GameState) {
+function upgradeGun(state: GameState, xp = 1) {
   if (state.gunLevel >= GUN_MAX_LEVEL) {
-    state.score += 50 // overflow into bonus score once maxed
+    state.score += 50 * xp // overflow into bonus score once maxed
     return
   }
-  state.gunXP += 1
+  state.gunXP += xp
   while (state.gunLevel < GUN_MAX_LEVEL && state.gunXP >= gunCostToNext(state.gunLevel)) {
     state.gunXP -= gunCostToNext(state.gunLevel)
     state.gunLevel += 1
   }
+  if (state.gunLevel === GUN_MAX_LEVEL) {
+    state.score += state.gunXP * 50
+    state.gunXP = 0
+  }
+}
+
+// The no-pickup progression floor, independent of the player's actual gun.
+// Enemy health follows this curve, so lucky drops remain a real advantage.
+function earnedGunLevel(wave: number) {
+  const cleared = wave - 1
+  let xp = cleared + Math.floor(cleared / 3)
+  let level = 1
+  while (level < GUN_MAX_LEVEL && xp >= gunCostToNext(level)) {
+    xp -= gunCostToNext(level)
+    level += 1
+  }
+  return level
 }
 
 export function newGame(width: number, height: number, startLevel = 1): GameState {
@@ -123,6 +141,8 @@ export function updateGame(state: GameState, dt: number, now: number, width: num
   if (state.player.hp <= 0) state.gameOver = true
   if (anyEnemyAtPlayerLine(state, height)) state.gameOver = true
   if (!state.gameOver) {
+    // Award once, on an actual clear. The next update spawns the next wave.
+    if (state.enemies.length === 0) upgradeGun(state, state.wave % 3 === 0 ? 2 : 1)
     // A surviving hit primes a Gemini dive. Queue damaged stars one at a time.
     if (!state.enemies.some((enemy) => enemy.meteorPhase)) {
       const star = state.enemies.find((enemy) => !enemy.isBoss && enemy.provider === "gemini" && enemy.hp < enemy.maxHp)
@@ -155,7 +175,7 @@ export function updateGame(state: GameState, dt: number, now: number, width: num
  *   4 | 2 close-parallel  |   3    | damage++
  *   5 | 3 forward (close) |   3    | three barrels
  *   6 | 3 forward (close) |   4    | damage++, baseline cd faster
- *   7 | 1 center, pierce  |   4    | bullets pierce 1
+ *   7 | 3 forward, pierce |   4    | bullets pierce 1
  *   8 | 3 forward, pierce |   5    | three barrels + pierce 1
  */
 export function shoot(state: GameState, now: number, lastShot: number) {
@@ -213,8 +233,6 @@ function baseDamageForLevel(lvl: number): number {
 }
 
 function baseShotsForLevel(lvl: number): number[] {
-  if (lvl >= 8) return [-1, 0, 1]
-  if (lvl === 7) return [0]
   if (lvl >= 5) return [-1, 0, 1]
   if (lvl >= 3) return [-1, 1]
   return [0]
@@ -231,6 +249,10 @@ export function resizeGameState(state: GameState, oldWidth: number, width: numbe
     }
     if (enemy.provider && !enemy.isBoss) enemy.baseY = Math.min(enemy.baseY, height - 8 - enemy.sprite.length)
     enemy.baseX = clamp((enemy.baseX / oldWidth) * width, 2, width - 4)
+    if (enemy.provider === "gemini") {
+      const halfWidth = Math.ceil(GEMINI_METEOR_SPRITE[0]!.length / 2)
+      enemy.baseX = clamp(enemy.baseX, halfWidth + 1, width - halfWidth - 2)
+    }
     enemy.x = enemy.provider && !enemy.isBoss ? enemy.baseX : enemy.baseX + state.waveOffsetX
   }
   for (const bullet of state.bullets) bullet.x = clamp((bullet.x / oldWidth) * width, 1, width - 2)
@@ -266,9 +288,11 @@ function spawnWave(state: GameState, width: number, height: number) {
   }
 
   const wave = state.wave
-  const columns = clamp(4 + Math.floor(wave / 1.5), 5, Math.min(13, Math.floor(width / 9)))
-  const rows = Math.min(5, 2 + Math.floor(wave / 2))
-  const spacingX = Math.max(8, Math.floor((width - 12) / columns))
+  // Grow slowly to at most 24 enemies; later difficulty comes from armor.
+  // Leave room for the widest ships and a few descents in short terminals.
+  const columns = Math.min(8, 5 + Math.floor((wave - 1) / 4), Math.max(1, Math.floor((width - 12) / 10)))
+  const rows = Math.min(3, 2 + Math.floor(wave / 4), Math.max(1, Math.floor((height - 12) / 6)))
+  const spacingX = Math.max(10, Math.floor((width - 12) / columns))
   const startX = Math.floor((width - spacingX * (columns - 1)) / 2)
 
   for (let row = 0; row < rows; row++) {
@@ -295,23 +319,27 @@ function spawnWave(state: GameState, width: number, height: number) {
 }
 
 function pickEnemy(wave: number, row: number, col: number) {
+  // Scouts take about one baseline hit during gun progression. Once the gun
+  // caps, armor gains 1 HP every six waves rather than adding more bodies.
+  const scoutHp = baseDamageForLevel(earnedGunLevel(wave)) + Math.floor(Math.max(0, wave - 13) / 6)
+  const bruiserHp = Math.max(2, Math.ceil(scoutHp * 1.6))
   const dreadnought = row === 0 && wave >= 7 && col % 4 === wave % 4
   if (dreadnought) {
-    return { sprite: randomFrom(DREADNOUGHT_SPRITES), hp: 6 + Math.floor(wave * 0.6), points: 175, fireType: "standard" as const }
+    return { sprite: randomFrom(DREADNOUGHT_SPRITES), hp: scoutHp * 3 + 2, points: 175, fireType: "standard" as const }
   }
   const sniper = wave >= 5 && row === 0 && Math.random() < 0.18
   if (sniper) {
-    return { sprite: randomFrom(SNIPER_SPRITES), hp: 2 + Math.floor(wave * 0.4), points: 110, fireType: "aimed" as const }
+    return { sprite: randomFrom(SNIPER_SPRITES), hp: scoutHp + 1, points: 110, fireType: "aimed" as const }
   }
   const burster = wave >= 8 && row === 1 && Math.random() < 0.2
   if (burster) {
-    return { sprite: randomFrom(BURSTER_SPRITES), hp: 3 + Math.floor(wave * 0.5), points: 130, fireType: "burst" as const }
+    return { sprite: randomFrom(BURSTER_SPRITES), hp: scoutHp * 2 + 1, points: 130, fireType: "burst" as const }
   }
   const tough = row === 0 || (wave >= 3 && row === 1 && col % 3 === 0)
   if (tough) {
-    return { sprite: randomFrom(BRUISER_SPRITES), hp: 2 + Math.floor(wave * 0.4), points: 75, fireType: "standard" as const }
+    return { sprite: randomFrom(BRUISER_SPRITES), hp: bruiserHp, points: 75, fireType: "standard" as const }
   }
-  return { sprite: randomFrom(SCOUT_SPRITES), hp: 1, points: 25, fireType: "standard" as const }
+  return { sprite: randomFrom(SCOUT_SPRITES), hp: scoutHp, points: 25, fireType: "standard" as const }
 }
 
 function spawnBoss(state: GameState, width: number, height: number) {
@@ -389,17 +417,45 @@ function updateWave(state: GameState, dt: number, difficulty: number, width: num
       continue
     }
     if (enemy.provider && !enemy.isBoss) {
-      const halfWidth = Math.ceil(Math.max(...enemy.sprite.map((row) => row.length)) / 2)
+      // Reserve the future meteor's width so a dive never shifts sideways
+      // after its lane has been telegraphed.
+      const patrolSprite = enemy.provider === "gemini" ? GEMINI_METEOR_SPRITE : enemy.sprite
+      const halfWidth = Math.ceil(Math.max(...patrolSprite.map((row) => row.length)) / 2)
       const lane = escorts.indexOf(enemy)
       const laneWidth = (width - 3) / Math.max(1, escorts.length)
       const left = 1 + lane * laneWidth + halfWidth
       const right = Math.max(left, 1 + (lane + 1) * laneWidth - halfWidth)
       if (enemy.x <= left) enemy.patrolDirection = 1
       if (enemy.x >= right) enemy.patrolDirection = -1
-      const step = (7 + wave * 0.2) * dt
       // When another escort dies, smoothly travel into the newly expanded lane.
       const target = (enemy.patrolDirection ?? 1) > 0 ? right : left
-      enemy.x += clamp(target - enemy.x, -step, step)
+      const speed = 7 + wave * 0.2
+      if (enemy.provider === "gemini") {
+        // Brake before the turn, then accelerate back out instead of instantly
+        // reversing direction. Keep velocity when a patrol lane expands.
+        const distance = target - enemy.x
+        const acceleration = 12
+        const previous = enemy.patrolSpeed ?? 0
+        const direction = Math.sign(distance)
+        // Reserve enough distance to brake after this frame's movement.
+        // Including the current velocity avoids a last-frame snap to zero.
+        const braking = acceleration * dt
+        const safeSpeed = Math.max(0, (Math.sqrt(Math.max(0,
+          braking * braking + 8 * acceleration * Math.abs(distance) - 4 * braking * previous * direction,
+        )) - braking) / 2)
+        const desired = direction * Math.min(speed, safeSpeed)
+        const next = previous + clamp(desired - previous, -acceleration * dt, acceleration * dt)
+        const step = (previous + next) * 0.5 * dt
+        if (Math.abs(step) >= Math.abs(distance) && step * distance >= 0) {
+          enemy.x = target
+          enemy.patrolSpeed = 0
+        } else {
+          enemy.x += step
+          enemy.patrolSpeed = next
+        }
+      } else {
+        enemy.x += clamp(target - enemy.x, -speed * dt, speed * dt)
+      }
       enemy.x = clamp(enemy.x, halfWidth + 1, width - halfWidth - 2)
       enemy.baseX = enemy.x
       enemy.y = Math.min(enemy.baseY, height - 8 - enemy.sprite.length)
@@ -438,19 +494,26 @@ function updateWave(state: GameState, dt: number, difficulty: number, width: num
 }
 
 function updateMeteor(enemy: GameState["enemies"][number], dt: number, width: number, height: number) {
+  let fallingDt = dt
   if (enemy.meteorPhase === "warning") {
-    enemy.meteorCd = (enemy.meteorCd ?? 0) - dt
-    if (enemy.meteorCd <= 0) {
-      // Grow upwards so the larger hitbox never jumps towards the player.
-      enemy.y += enemy.sprite.length - GEMINI_METEOR_SPRITE.length
-      enemy.sprite = GEMINI_METEOR_SPRITE
-      enemy.x = clamp(enemy.x, 10, width - 11)
-      enemy.baseX = enemy.x
-      enemy.meteorPhase = "falling"
-    }
-    return
+    const remaining = enemy.meteorCd ?? 0
+    enemy.meteorCd = Math.max(0, remaining - dt)
+    if (enemy.meteorCd > 0) return
+    fallingDt = Math.max(0, dt - Math.max(0, remaining))
+    // Grow upwards so the larger hitbox never jumps towards the player.
+    enemy.y += enemy.sprite.length - GEMINI_METEOR_SPRITE.length
+    enemy.sprite = GEMINI_METEOR_SPRITE
+    enemy.x = clamp(enemy.x, 10, width - 11)
+    enemy.baseX = enemy.x
+    enemy.meteorPhase = "falling"
+    enemy.meteorElapsed = 0
   }
-  enemy.y += 9 * dt
+  const elapsed = enemy.meteorElapsed ?? 0
+  enemy.meteorElapsed = elapsed + fallingDt
+  // Ramp from 4 to 12 cells/sec during the first second, then hold steady.
+  // Integrate the curve exactly so the fall is independent of frame rate.
+  const distance = (t: number) => t < 1 ? 4 * t + 4 * t * t : 8 + 12 * (t - 1)
+  enemy.y += distance(enemy.meteorElapsed) - distance(elapsed)
   if (enemy.y >= height - 1) enemy.hp = 0
 }
 
@@ -459,7 +522,8 @@ function summonEscorts(state: GameState, boss: GameState["enemies"][number], wid
   const escorts = state.enemies.filter((enemy) => enemy.provider && !enemy.isBoss)
   const provider = boss.provider!
   const sprite = PROVIDERS[provider].sprite
-  const halfWidth = Math.ceil(Math.max(...sprite.map((row) => row.length)) / 2)
+  const patrolSprite = provider === "gemini" ? GEMINI_METEOR_SPRITE : sprite
+  const halfWidth = Math.ceil(Math.max(...patrolSprite.map((row) => row.length)) / 2)
   // Refill the squad while the boss lives; shared pickup budgets prevent farming.
   const limit = provider === "gemini" ? 4 : 3
   const available = Math.max(0, limit - escorts.length)
@@ -633,12 +697,9 @@ function collide(state: GameState, now: number, height: number) {
     if (bullet.friendly) {
       for (const enemy of state.enemies) {
         if (enemy.hp <= 0 || bullet.hitEnemies?.has(enemy)) continue
-        // Once wounded, a Gemini star is guaranteed to complete its warning
-        // and begin the dive. It becomes shootable again while falling.
-        if (enemy.meteorPhase === "warning" && hitSprite(bullet.x, bullet.y, enemy.x, enemy.y, enemy.sprite)) {
-          bullet.y = -99
-          continue
-        }
+        // Committed dives are dodge-only hazards. Shots pass through so the
+        // player can still fight the boss, without spending piercing charges.
+        if (enemy.meteorPhase) continue
         if (hitSprite(bullet.x, bullet.y, enemy.x, enemy.y, enemy.sprite)) {
           enemy.hp -= bullet.damage
           if (enemy.isBoss && enemy.hp > 0) {
@@ -707,9 +768,9 @@ function destroyEscorts(state: GameState) {
   }
 }
 
-// Weighted drop pool: pierce is intentionally rare; others share evenly.
+// Gun XP is favored; pierce stays rare and other boosts share evenly.
 const DROP_WEIGHTS: Array<[Drop["kind"], number]> = [
-  ["gun", 4],
+  ["gun", 5],
   ["rapid", 3],
   ["shield", 3],
   ["spread", 3],
@@ -750,10 +811,10 @@ function maybeDrop(state: GameState, x: number, y: number, now: number, bossHit 
   if (state.drops.filter((drop) => drop.ttl > 0).length >= 2) return
 
   const armed = ["rapid", "spread", "triple", "pierce"].some((kind) => activeDrop(state, kind as Drop["kind"], now))
-  const baseChance = bossWave ? (armed ? 0.15 : 0.25) : (armed ? 0.08 : 0.14)
+  const baseChance = bossWave ? (armed ? 0.18 : 0.28) : (armed ? 0.10 : 0.17)
   // Dry streaks gently improve the odds; an already boosted player needs less help.
-  const chance = bossHit ? (armed ? 0.55 : 0.9)
-    : Math.min(bossWave ? 0.5 : 0.38, baseChance + Math.max(0, state.killsSinceDrop - 3) * 0.025)
+  const chance = bossHit ? (armed ? 0.6 : 0.92)
+    : Math.min(bossWave ? 0.53 : 0.41, baseChance + Math.max(0, state.killsSinceDrop - 3) * 0.025)
   if (Math.random() >= chance) return
   const kind = pickDropKind(state, now)
   if (!kind) return
