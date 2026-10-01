@@ -33,10 +33,11 @@ function geminiPixels(size: number) {
     const x = col / (size - 1)
     const y = row / (size - 1)
     // An astroid outline gives four pointed arms with concave sides, not a
-    // filled diamond. A small raster tolerance keeps the tiny arms connected.
+    // filled diamond. The raster tolerance fills out the arms near the tips
+    // without widening the final single-pixel points or the sprite bounds.
     const horizontal = Math.abs(col - center) / center
     const vertical = Math.abs(row - center) / center
-    if (horizontal ** (2 / 3) + vertical ** (2 / 3) > 1.1) return " "
+    if (horizontal ** (2 / 3) + vertical ** (2 / 3) > 1.23) return " "
     const weights = anchors.map((point) => 1 / (0.008 + (x - point.x) ** 2 + (y - point.y) ** 2) ** 2)
     const total = weights.reduce((sum, weight) => sum + weight, 0)
     const rgb = [0, 1, 2].map((channel) => Math.round(anchors.reduce((sum, point, index) => sum + point.rgb[channel]! * weights[index]!, 0) / total))

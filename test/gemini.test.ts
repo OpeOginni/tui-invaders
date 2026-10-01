@@ -34,9 +34,12 @@ describe("Gemini star silhouettes", () => {
       const filled = (row: number, col: number) => pixels[row]![col] !== " "
       expect(pixels.every((row) => row.length === size)).toBe(true)
       expect([...pixels[0]!].filter((pixel) => pixel !== " ")).toHaveLength(1)
+      expect([...pixels[1]!].filter((pixel) => pixel !== " ")).toHaveLength(3)
+      expect([...pixels[size - 2]!].filter((pixel) => pixel !== " ")).toHaveLength(3)
       expect([...pixels[center]!].every((pixel) => pixel !== " ")).toBe(true)
-      // Concave arms leave substantially more space than a diamond would.
-      expect([...pixels[center - 2]!].filter((pixel) => pixel !== " ").length).toBeLessThan(size - 4)
+      // Fuller arms still curve inward rather than becoming a filled diamond.
+      const shoulderRow = Math.floor(center / 2)
+      expect([...pixels[shoulderRow]!].filter((pixel) => pixel !== " ").length).toBeLessThan(shoulderRow * 2 + 1)
       const collision = toCollisionFrame([...pixels])
       for (let row = 0; row < size; row++) {
         for (let col = 0; col < size; col++) {
