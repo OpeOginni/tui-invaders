@@ -1,9 +1,9 @@
 import type { RGBA } from "@opentui/core"
 
-export type EnemyFireType = "standard" | "aimed" | "burst"
+export type EnemyFireType = "standard" | "aimed" | "burst" | "weave"
 export type BossPattern = "spread3" | "aimed" | "rapidCenter" | "wide5" | "burst"
 export type Provider = "deepseek" | "gemini"
-export type BossCharacter = "dax" | "hona"
+export type BossCharacter = "dax" | "hona" | "kit"
 
 export type Bullet = {
   x: number
@@ -14,6 +14,7 @@ export type Bullet = {
   friendly: boolean
   pierce?: number
   hitEnemies?: Set<Enemy>
+  owner?: Enemy
 }
 export type Enemy = {
   x: number
@@ -43,13 +44,22 @@ export type Enemy = {
   meteorPhase?: "warning" | "falling"
   meteorElapsed?: number
   rewardDamage?: number
+  kitPhase?: 1 | 2
+  kitModule?: "extension"
+  kitSlot?: number
+  kitClock?: number
+  kitVolley?: number
+  kitAim?: number
+  kitAimY?: number
 }
 export type Drop = { x: number; y: number; kind: "gun" | "rapid" | "shield" | "spread" | "triple" | "pierce" | "life"; ttl: number }
 export type Particle = { x: number; y: number; glyph: string; ttl: number; color: RGBA }
 export type HighScore = { name: string; score: number; seconds: number; date: string }
 
 export type GameState = {
-  player: { x: number; y: number; hp: number; shieldUntil: number }
+  ship?: "opencode" | "opencodejr"
+  kitOutro?: { remaining: number }
+  player: { x: number; y: number; hp: number; shieldUntil: number; hurtUntil?: number }
   bullets: Bullet[]
   enemies: Enemy[]
   drops: Drop[]
@@ -57,6 +67,7 @@ export type GameState = {
   score: number
   start: number
   elapsed: number
+  arenaHeight?: number
   spawnTimer: number
   gunLevel: number
   gunXP: number
@@ -69,6 +80,7 @@ export type GameState = {
   killsSinceDrop: number
   lastDropAt: number
   bossIntro?: { bossName: string; title: string; tagline: string; tip: string; remaining: number }
+  encounterNotice?: { text: string; until: number }
   wave: number
   waveDirection: number
   waveOffsetX: number

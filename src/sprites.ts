@@ -1,6 +1,33 @@
 import type { BossCharacter } from "./types.js"
 
 export const PLAYER_SPRITE = ["█▀▀█", "█__█", "▀▀▀▀"]
+export function shipPixels(junior: boolean, glance = 0) {
+  const pixels = [
+    "WWWWWWWWWWWW", "WWWWWWWWWWWW", "WW        WW", "WW        WW",
+    "WW        WW", "WW        WW", "WWDDDDDDDDWW", "WWDDDDDDDDWW",
+    "WWDDDDDDDDWW", "WWDDDDDDDDWW", "WWDDDDDDDDWW", "WWDDDDDDDDWW",
+    "WWWWWWWWWWWW", "WWWWWWWWWWWW",
+  ].map((line) => [...line])
+  if (junior) {
+    for (const row of pixels) {
+      for (let col = 0; col < row.length; col++) if (row[col] === "D") row[col] = " "
+    }
+    for (const [x, y, shift] of [[3, 3, glance], [6, 7, 1 - glance]] as const) {
+      const eye = [" GG ", "GWWG", "GWWG", " GG "]
+      for (let row = 0; row < 4; row++) for (let col = 0; col < 4; col++) {
+        if (eye[row]![col] !== " ") pixels[y + row]![x + col] = eye[row]![col]!
+      }
+      pixels[y + 2]![x + 1 + shift] = "K"
+      pixels[y + 3]![x + 1 + shift] = "K"
+    }
+  }
+  return pixels.map((row) => row.join(""))
+}
+// Original-sized frame with chunky lenses. The renderer colors these mirrored
+// quadrants as dark glass with small outer-corner reflections, not thin slits.
+// The larger selection portrait deliberately retains its googly eyes.
+export const JUNIOR_SPRITE = ["█▀▀█", "█▟▙█", "▀▀▀▀"]
+export const JUNIOR_SHIELD_SPRITE = [" ▄▀▀▀▀▄ ", ...JUNIOR_SPRITE.map((row) => `▌ ${row} ▐`), " ▀▄▄▄▄▀ "]
 export const PLAYER_SHIELD_SPRITE = [
   " ▄▀▀▀▀▄ ",
   "▌ █▀▀█ ▐",
@@ -165,7 +192,53 @@ const HONA_BOSS_FRAMES = HONA_PIXEL_FRAMES.map(toCollisionFrame)
 const HONA_COMPACT_PIXEL_FRAMES = HONA_PIXEL_FRAMES.map((frame) => frame.filter((_, row) => row % 2 === 0))
 const HONA_COMPACT_FRAMES = HONA_COMPACT_PIXEL_FRAMES.map(toCollisionFrame)
 
+// Based on Kit's curly-haired, googly-glasses portrait: highlighted curls,
+// round lenses, dark beard, olive jacket and a checked shirt / Effect core.
+const KIT_PIXELS = [
+  "      hHh   hHh       ",
+  "   hHHhHh hHHhHHh     ",
+  "  hHhHHHHhHHhHHHhHh   ",
+  " hHHHhHhHHHHHhHhHHHh  ",
+  " HHhHHHSSSSSSHHHhHHH  ",
+  "hHHhHHSSSSSSSSHHhHHHh ",
+  " HHhHSSKKKSSKKKSSHhHH ",
+  "hHHHSKWWWWKKWWWWKSHHh ",
+  " HHHSKWPPWKKWPPWKSHHH ",
+  " hHHSKWWWWSSWWWWKSHHh ",
+  "  HHSSSKKKSSKKKSSSHH  ",
+  "   HSSSSSSDDSSSSSHH   ",
+  "    BSSSSBBBBSSSSB    ",
+  "    BBSSSDDDSSSSBB    ",
+  "     BBBSSSSSSBBB     ",
+  "      SBBBBBBBSS      ",
+  "    JJJSSSSSSJJJJ     ",
+  "  JJJJJWKWWKWJJJJJJ   ",
+  " JJJJJJKWCCWKJJJJJJJ  ",
+  "  JJJJJWKCWKWJJJJJJ   ",
+]
+// The googly pupils glance sideways; whites and hair retain their colors.
+const KIT_PIXEL_FRAMES = [KIT_PIXELS, KIT_PIXELS.map((row) => row.replaceAll("WPPW", "PPWW"))]
+const KIT_FRAMES = KIT_PIXEL_FRAMES.map(toCollisionFrame)
+// Cracked glasses, tear trails, a bruised cheek and a downturned mouth.
+export const KIT_DEFEATED_PIXELS = KIT_PIXELS.map((line, row) => {
+  const pixels = [...line]
+  if (row === 8) { pixels[7] = "K"; pixels[14] = "K" }
+  if (row >= 9 && row <= 13) { pixels[7] = "C"; pixels[14] = "C" }
+  if (row === 11) { pixels[16] = "h"; pixels[17] = "h" }
+  if (row === 13) { pixels[9] = "B"; pixels[10] = "B"; pixels[11] = "B" }
+  if (row === 14) { pixels[8] = "B"; pixels[9] = "S"; pixels[10] = "S"; pixels[11] = "S"; pixels[12] = "B" }
+  return pixels.join("")
+})
+// Preserve curls, round lenses and beard in the six-cell compact portrait.
+const KIT_COMPACT_PIXELS = KIT_PIXEL_FRAMES.map((frame) => [0, 2, 3, 5, 6, 7, 8, 10, 12, 14, 17, 19].map((row) => frame[row]!))
+const KIT_COMPACT_FRAMES = KIT_COMPACT_PIXELS.map(toCollisionFrame)
+
 export function bossArt(character: BossCharacter = "dax", height: number) {
+  if (character === "kit") {
+    return height < 28
+      ? { frames: KIT_COMPACT_FRAMES, pixels: KIT_COMPACT_PIXELS }
+      : { frames: KIT_FRAMES, pixels: KIT_PIXEL_FRAMES }
+  }
   if (character === "hona") {
     return height < 28
       ? { frames: HONA_COMPACT_FRAMES, pixels: HONA_COMPACT_PIXEL_FRAMES }

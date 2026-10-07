@@ -32,6 +32,36 @@ function finishBackupCall(state: GameState) {
 }
 
 describe("boss operations", () => {
+  test("power-up cinematics restore 15% health once, only when they finish", () => {
+    for (const wave of [6, 9]) {
+      const state = spawnBoss(wave)
+      const boss = state.enemies[0]!
+      callBackup(state)
+      const before = boss.hp
+      updateGame(state, BOSS_INTRO_DURATION / 2, state.start + 1000, 120, 60, 0)
+      expect(boss.hp).toBe(before)
+      updateGame(state, BOSS_INTRO_DURATION / 2, state.start + 2000, 120, 60, 0)
+      const healed = Math.min(boss.maxHp, before + Math.ceil(boss.maxHp * 0.15))
+      expect(boss.hp).toBe(healed)
+      updateGame(state, 0, state.start + 2000, 120, 60, 0)
+      expect(boss.hp).toBe(healed)
+      expect(state.bossIntro).toBeUndefined()
+    }
+  })
+
+  test("Hona stars survive a level-6 full volley and enter their dodge-only warning", () => {
+    const state = spawnBoss(9)
+    state.gunLevel = 6
+    finishBackupCall(state)
+    const star = state.enemies.find((enemy) => enemy.provider === "gemini" && !enemy.isBoss)!
+    expect(star.maxHp).toBe(24)
+    hit(state, star, 8, 5)
+    expect(star.hp).toBe(16)
+    expect(star.meteorPhase).toBe("warning")
+    hit(state, star, 8, 5)
+    expect(star.hp).toBe(16)
+  })
+
   test("Luke fires a sweeping volley, then leaves a two-second return-fire window", () => {
     const state = spawnBoss(9)
     const boss = state.enemies[0]!
@@ -156,7 +186,7 @@ describe("boss operations", () => {
     }
   })
 
-  test("round 9 is Hona's Gemini operation; later encounters return to regular Dax", () => {
+  test("round 9 is Hona's Gemini operation; encounters after Kit return to regular Dax", () => {
     const hona = spawnBoss(9)
     expect(hona.bossIntro).toBeUndefined()
     callBackup(hona)
@@ -167,7 +197,7 @@ describe("boss operations", () => {
     resizeGameState(hona, 120, 60, 24)
     expect(hona.enemies[0]!.frames).toBe(bossArt("hona", 24).frames)
 
-    for (const wave of [12, 15, 18, 21, 24, 27, 30]) {
+    for (const wave of [15, 18, 21, 24, 27, 30]) {
       const state = spawnBoss(wave)
       const boss = state.enemies[0]!
       expect(boss.bossCharacter).toBe("dax")

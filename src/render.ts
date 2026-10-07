@@ -1,8 +1,9 @@
 import { RGBA, StyledText, type TextChunk, type TextRenderable } from "@opentui/core"
 import { currentPlayerSprite, currentPlayerTopY, gunCostToNext } from "./game.js"
 import { DEEPSEEK_WHALE_PIXELS, GEMINI_COLORS, GEMINI_ICON_PIXELS, GEMINI_METEOR_PIXELS, GEMINI_STAR_PIXELS, PROVIDERS } from "./bosses.js"
-import { arcadeText, BOSS_INTRO_DURATION, introCoverage } from "./cinematic.js"
-import { bossArt, DROP_SPRITES } from "./sprites.js"
+import { arcadeText, arcadeHeadline, BOSS_INTRO_DURATION, introCoverage } from "./cinematic.js"
+import { bossArt, DROP_SPRITES, KIT_DEFEATED_PIXELS, shipPixels } from "./sprites.js"
+import { EFFECT_EXTENSION_COLORS, EFFECT_EXTENSION_PIXELS, KIT_COLORS } from "./kit.js"
 import type { GameState, HighScore } from "./types.js"
 
 type Tone =
@@ -24,6 +25,7 @@ type Tone =
   | "boost"
   | "deepseek"
   | "gemini"
+  | "kit"
 
 type Cell = { char: string; fg: RGBA; bg: RGBA }
 
@@ -46,9 +48,12 @@ const PALETTE: Record<Tone, RGBA> = {
   boost: RGBA.fromHex("#ffe66d"),
   deepseek: RGBA.fromHex("#559dff"),
   gemini: RGBA.fromHex("#b29aff"),
+  kit: RGBA.fromHex("#67e8ce"),
 }
 
 const SPACE_BG = PALETTE.space
+const SHADES_COLOR = RGBA.fromHex("#263041")
+const SHADES_REFLECTION = RGBA.fromHex("#7e8fa5")
 const TRANSPARENT_PIXEL: RGBA | null = null
 
 // Dax pixel art color palette (real per-pixel colors)
@@ -81,6 +86,8 @@ const WHALE_COLORS: Record<string, RGBA> = {
 }
 
 export type RenderOptions = {
+  selectingShip?: boolean
+  selectedShip?: "opencode" | "opencodejr"
   canvas: TextRenderable
   state: GameState
   highscores: HighScore[]
@@ -115,6 +122,11 @@ export function draw(options: RenderOptions) {
   const painter = new Painter(options.width, options.height)
   drawStars(painter, options.stars, options.now)
   painter.drawFrame()
+  if (options.selectingShip) {
+    drawShipSelection(painter, options)
+    options.canvas.content = painter.toStyledText()
+    return
+  }
 
   for (const drop of options.state.drops) painter.drawSprite(DROP_SPRITES[drop.kind], Math.round(drop.x), Math.round(drop.y), dropTone(drop.kind))
   for (const bullet of options.state.bullets) {
@@ -125,8 +137,12 @@ export function draw(options: RenderOptions) {
     } else {
       // enemy shots: bright head + dim trail for visibility
       const pulse = Math.floor(options.now / 120) % 2 === 0
-      painter.drawText("│", x, y - 1, "dangerTrail")
-      painter.drawText(pulse ? "▼" : "◆", x, y, "dangerBright")
+      const horizontal = Math.abs(bullet.dx ?? 0) > Math.abs(bullet.dy)
+      const stepX = horizontal ? Math.sign(bullet.dx ?? 0) : 0
+      const stepY = horizontal ? 0 : Math.sign(bullet.dy)
+      const head = horizontal ? (stepX > 0 ? "▶" : "◀") : (stepY < 0 ? "▲" : "▼")
+      painter.drawText(horizontal ? "─" : "│", x - stepX, y - stepY, "dangerTrail")
+      painter.drawText(pulse ? head : "◆", x, y, "dangerBright")
     }
   }
   for (const enemy of options.state.enemies) {
@@ -134,8 +150,41 @@ export function draw(options: RenderOptions) {
       const frameIdx = Math.max(0, enemy.frames?.indexOf(enemy.sprite) ?? 0)
       const { pixels } = bossArt(enemy.bossCharacter, options.height)
       const pixelFrame = pixels[frameIdx] ?? pixels[0]!
-      painter.drawPixelArt(pixelFrame, enemy.bossCharacter === "hona" ? HONA_COLORS : DAX_COLORS, Math.round(enemy.x), Math.round(enemy.y))
+      painter.drawPixelArt(pixelFrame, enemy.bossCharacter === "kit" ? KIT_COLORS : enemy.bossCharacter === "hona" ? HONA_COLORS : DAX_COLORS, Math.round(enemy.x), Math.round(enemy.y))
       drawBossBar(painter, enemy, options.width)
+      if (enemy.bossCharacter === "kit") {
+        const extensions = options.state.enemies.filter((module) => module.kitModule && module.hp > 0).length
+        const armored = extensions > 0
+        if (armored) {
+          const halfWidth = Math.ceil(Math.max(...enemy.sprite.map((row) => row.length)) / 2) + 1
+          const left = Math.round(enemy.x) - halfWidth
+          const right = Math.round(enemy.x) + halfWidth
+          const top = Math.round(enemy.y) - 1
+          const bottom = Math.round(enemy.y) + enemy.sprite.length
+          const tone: Tone = Math.floor(options.now / 220) % 2 ? "kit" : "starBright"
+          painter.drawText("╭" + "─".repeat(right - left - 1) + "╮", left, top, tone)
+          painter.drawText("╰" + "─".repeat(right - left - 1) + "╯", left, bottom, tone)
+          for (let y = top + 1; y < bottom; y++) {
+            painter.drawText("│", left, y, tone)
+            painter.drawText("│", right, y, tone)
+          }
+        }
+        const label = `v${enemy.kitPhase ?? 0}.0  EXTENSIONS ${extensions} / ${armored ? "SHIELDED" : "VULNERABLE"}`
+        painter.drawText(label, Math.floor((options.width - label.length) / 2), 3 + enemy.sprite.length, "kit")
+        // Lock-on is visible for 0.9s before a volley. Retried shots keep it.
+        if (enemy.kitAim !== undefined) {
+          const x = Math.round(enemy.kitAim)
+          const y = Math.round(enemy.kitAimY ?? options.state.player.y)
+          painter.drawText("▼", x, y - 2, "dangerBright")
+        }
+      }
+    } else if (enemy.kitModule) {
+      const x = Math.round(enemy.x)
+      const y = Math.round(enemy.y)
+      const charging = enemy.fireCd <= 0.8
+      painter.drawPixelArt(EFFECT_EXTENSION_PIXELS, charging ? { W: PALETTE.boost } : EFFECT_EXTENSION_COLORS, x, y)
+      const remaining = Math.ceil(5 * enemy.hp / enemy.maxHp)
+      painter.drawText("━".repeat(remaining) + "·".repeat(5 - remaining), x - 2, y + enemy.sprite.length, charging ? "boost" : "dim")
     } else if (enemy.provider === "deepseek") {
       painter.drawPixelArt(DEEPSEEK_WHALE_PIXELS, WHALE_COLORS, Math.round(enemy.x), Math.round(enemy.y))
     } else if (enemy.provider === "gemini") {
@@ -164,10 +213,26 @@ export function draw(options: RenderOptions) {
   }
   for (const p of options.state.particles) painter.drawTextRaw(p.glyph, Math.round(p.x), Math.round(p.y), p.color)
 
-  painter.drawLogoSprite(currentPlayerSprite(options.state, options.now), Math.round(options.state.player.x), Math.round(currentPlayerTopY(options.state, options.now)), "player")
+  const hurt = options.now < (options.state.player.hurtUntil ?? 0) && Math.floor(options.now / 100) % 2 === 0
+  painter.drawLogoSprite(currentPlayerSprite(options.state, options.now), Math.round(options.state.player.x), Math.round(currentPlayerTopY(options.state, options.now)), hurt ? "dangerBright" : "player")
+  if (options.state.ship === "opencodejr") {
+    const left = Math.round(Math.round(options.state.player.x) - 2)
+    const y = Math.round(options.state.player.y) + 1
+    for (const [col, glyph] of [..."▟▙"].entries()) {
+      painter.drawTextRaw(glyph, left + col + 1, y, SHADES_COLOR, SHADES_REFLECTION)
+    }
+  }
   drawHud(painter, options)
+  if (options.state.encounterNotice && options.state.encounterNotice.until > options.state.elapsed) {
+    const text = options.state.encounterNotice.text.slice(0, options.width - 4)
+    // Temporarily replace the boss-name row, keeping health and player space
+    // unobstructed. Clear it first so longer names cannot bleed through.
+    painter.drawText(" ".repeat(options.width - 2), 1, 1, "space")
+    painter.drawText(text, Math.floor((options.width - text.length) / 2), 1, "kit")
+  }
 
   if (options.state.bossIntro && !options.state.gameOver) drawBossIntro(painter, options)
+  if (options.state.kitOutro && !options.state.gameOver) drawKitOutro(painter, options)
 
   if (options.paused && !options.state.gameOver) drawPauseDialog(painter, options.width, options.height)
   if (options.state.gameOver) drawGameOver(painter, options)
@@ -227,8 +292,8 @@ class Painter {
     for (let i = 0; i < text.length; i++) this.put(x + i, y, text[i]!, tone)
   }
 
-  drawTextRaw(char: string, x: number, y: number, fg: RGBA) {
-    this.putRaw(x, y, char, fg, SPACE_BG)
+  drawTextRaw(char: string, x: number, y: number, fg: RGBA, bg = SPACE_BG) {
+    this.putRaw(x, y, char, fg, bg)
   }
 
   drawSprite(sprite: readonly string[], centerX: number, topY: number, tone: Tone = "hud") {
@@ -356,18 +421,23 @@ function drawHud(painter: Painter, { state, highscores, width, height, now }: Re
     ["pierce", state.pierceUntil],
     ["shield", state.player.shieldUntil],
   ]
-  painter.drawText(` Level ${state.wave}`, 2, 0, "boost")
-  const a = `  Score ${state.score}`
-  painter.drawText(a, 11, 0, "hud")
-  const b = `  Time ${formatTime(state.elapsed)}`
-  painter.drawText(b, 11 + a.length, 0, "drop")
-  const c = `  Lives ${state.player.hp}`
-  painter.drawText(c, 11 + a.length + b.length, 0, "danger")
   const next = gunCostToNext(state.gunLevel)
-  const d = next > 0 ? `  Gun Lv.${state.gunLevel} (${state.gunXP}/${next})` : `  Gun Lv.${state.gunLevel} MAX`
-  painter.drawText(d, 11 + a.length + b.length + c.length, 0, "player")
-  painter.drawText(hi ? `Best ${hi.score} ${hi.name}` : "Best none", width - 24, 0, "boost")
-  const controls = "[P] pause  [Space] shoot"
+  const compact = width < 100
+  const stats: Array<[string, Tone]> = [
+    [compact ? `Lv${state.wave}` : `Level ${state.wave}`, "boost"],
+    [`Score ${state.score}`, "hud"],
+    [compact ? `HP ${state.player.hp}` : `Lives ${state.player.hp}`, "danger"],
+    [`Gun ${compact ? "" : "Lv."}${state.gunLevel} ${next > 0 ? `(${state.gunXP}/${next})` : "MAX"}`, "player"],
+    [compact ? formatTime(state.elapsed) : `Time ${formatTime(state.elapsed)}`, "drop"],
+    [hi ? `Best ${hi.score} ${hi.name}` : "Best none", "boost"],
+  ]
+  let statX = 2
+  for (const [text, tone] of stats) {
+    if (statX + text.length > width - 2) break
+    painter.drawText(text, statX, 0, tone)
+    statX += text.length + 2
+  }
+  const controls = "[P] pause  [Space] shoot  [WASD/Arrows] move"
   painter.drawText(controls, 3, height - 1, "hud")
   const legend = ["gun ▟█▙", "rapid ▌▌▌", "shield ◖█◗", "spread ╲█╱", "triple ▌█▐", "pierce ▶█▶", "life ♥"]
   const legendX = Math.max(3 + controls.length + 3, width - 71)
@@ -394,7 +464,8 @@ function drawBossIntro(painter: Painter, { state, width, height }: RenderOptions
   const coverage = introCoverage(intro.remaining)
   if (coverage <= 0) return
   const scene = new Painter(width, height)
-  const tone: Tone = state.enemies.find((enemy) => enemy.isBoss)?.provider ?? "boost"
+  const boss = state.enemies.find((enemy) => enemy.isBoss)
+  const tone: Tone = boss?.bossCharacter === "kit" ? "kit" : boss?.provider ?? "boost"
   const centerX = Math.floor(width / 2)
   const centerY = Math.floor(height / 2)
 
@@ -415,12 +486,13 @@ function drawBossIntro(painter: Painter, { state, width, height }: RenderOptions
   const fullTitle = arcadeText(intro.title)
   const titles = fullTitle[0]!.length <= width - 6
     ? [intro.title]
-    : intro.title.startsWith("Operation ") ? ["OPERATION", intro.title.slice(10)] : ["GEMINI", "FOR LIFE"]
-  const titleHeight = titles.length * 6 - 1
+    : intro.title.startsWith("Operation ") ? ["OPERATION", intro.title.slice(10)] : intro.title === "Gemini For Life" ? ["GEMINI", "FOR LIFE"] : intro.title.split(" ")
+  const headline = tone === "kit" ? arcadeHeadline(intro.title, width - 6, height - 8) : undefined
+  const titleHeight = headline?.length ?? titles.length * 6 - 1
   const titleTop = Math.floor((height - titleHeight) / 2)
   const settle = Math.max(0, 1 - (elapsed - 0.25) / 0.6)
-  for (const [index, title] of titles.entries()) {
-    const rows = arcadeText(title)
+  for (const [index, title] of (headline ? [intro.title] : titles).entries()) {
+    const rows = headline ?? arcadeText(title)
     const slide = Math.round(settle * settle * 8) * (index % 2 === 0 ? -1 : 1)
     const left = Math.floor((width - rows[0]!.length) / 2) + slide
     for (const [row, text] of rows.entries()) {
@@ -436,6 +508,8 @@ function drawBossIntro(painter: Painter, { state, width, height }: RenderOptions
   } else if (tone === "gemini") {
     const pixels = emblemY + GEMINI_STAR_PIXELS.length / 2 <= height - 2 ? GEMINI_STAR_PIXELS : GEMINI_ICON_PIXELS
     scene.drawPixelArt(pixels, GEMINI_COLORS, centerX, emblemY)
+  } else if (tone === "kit") {
+    // The joke is the headline; no duplicate caption or operation label.
   } else {
     scene.drawText("── ◆ ──", centerX - 4, emblemY, tone)
   }
@@ -448,11 +522,48 @@ function drawBossIntro(painter: Painter, { state, width, height }: RenderOptions
   }
 }
 
+function drawShipSelection(painter: Painter, { width, height, selectedShip, now }: RenderOptions) {
+  const center = Math.floor(width / 2)
+  const title = arcadeHeadline("TUI INVADERS", width - 6, 5)
+  for (const [row, line] of title.entries()) painter.drawText(line, Math.floor((width - line.length) / 2), 2 + row, "boost")
+  const junior = selectedShip === "opencodejr"
+  const top = Math.max(9, Math.floor(height / 2) - 3)
+  painter.drawPixelArt(shipPixels(junior, Math.floor(now / 450) % 2), { W: PALETTE.player, D: RGBA.fromHex("#4b4b48"), G: PALETTE.star, K: SPACE_BG }, center, top)
+  painter.drawText("◀", center - 14, top + 3, "boost")
+  painter.drawText("▶", center + 13, top + 3, "boost")
+  const name = junior ? "OpenCodeJr" : "OpenCode"
+  painter.drawText(name, center - Math.floor(name.length / 2), top + 8, "player")
+  const controls = "← / → or A / D: choose    Enter / Space: launch"
+  painter.drawText(controls, Math.floor((width - controls.length) / 2), height - 3, "hud")
+  const caption = junior ? "Big eyes. Same firepower." : "The original pilot."
+  painter.drawText(caption, center - Math.floor(caption.length / 2), height - 5, "dim")
+}
+
+function drawKitOutro(painter: Painter, { state, width, height }: RenderOptions) {
+  const scene = new Painter(width, height)
+  scene.drawFrame()
+  const center = Math.floor(width / 2)
+  const top = Math.max(3, Math.floor((height - 16) / 2))
+  scene.drawPixelArt(KIT_DEFEATED_PIXELS, { ...KIT_COLORS, C: RGBA.fromHex("#79cfff") }, center, top)
+  const elapsed = 3.8 - state.kitOutro!.remaining
+  const tearY = top + 7 + Math.floor(elapsed * 3) % 3
+  scene.drawText("╵", center - 4, tearY, "deepseek")
+  scene.drawText("╵", center + 3, tearY, "deepseek")
+  const quote = "Fine. I'll blog about this."
+  const boxWidth = quote.length + 4
+  const left = Math.floor((width - boxWidth) / 2)
+  const bubbleY = top + 12
+  scene.drawText("╱", center + 3, bubbleY - 1, "kit")
+  scene.drawBox(left, bubbleY, boxWidth, 3, "kit")
+  scene.drawText(quote, left + 2, bubbleY + 1, "hud")
+  painter.overlayRows(scene, 0, height)
+}
+
 function drawPauseDialog(painter: Painter, width: number, height: number) {
   const lines = [
     "PAUSED",
     "",
-    "← →   move",
+    "↑ ↓ ← → / WASD   move",
     "Space  shoot",
     "P      resume",
     "Ctrl+C quit",

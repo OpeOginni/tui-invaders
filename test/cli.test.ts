@@ -19,6 +19,7 @@ describe("starting level", () => {
 
   test("starts at Hona and restarts there without resetting progression rules", () => {
     const game = new InvadersGame(120, 60, [], undefined, 9)
+    game.start()
     expect(game.level).toBe(9)
     game.step()
     expect(game.state.wave).toBe(9)
@@ -28,6 +29,7 @@ describe("starting level", () => {
     game.step()
     expect(game.level).toBe(10)
     game.restart()
+    game.start()
     game.step()
     expect(game.level).toBe(9)
     expect(game.state.enemies[0]!.bossCharacter).toBe("hona")

@@ -54,6 +54,68 @@ describe("game progression", () => {
     }
   })
 
+  test("the second boss aims at distant player lanes and recovers faster below half health", () => {
+    for (const [health, rest] of [[1, 1.8], [0.5, 1.35]] as const) {
+      const state = newGame(120, 60, 6)
+      updateGame(state, 0, state.start, 120, 60, 0)
+      const boss = state.enemies[0]!
+      boss.hp = boss.maxHp * health
+      // Isolate shooting from the provider's separate backup transition.
+      boss.backupCalled = true
+      boss.summonCd = Infinity
+      state.player.x = 85
+      for (let shot = 0; shot < 3; shot++) {
+        boss.fireCd = 0
+        updateGame(state, 0, state.start, 120, 60, 0)
+        const bullet = state.bullets[shot]!
+        const travelTime = (state.player.y - bullet.y) / bullet.dy
+        expect(bullet.x + bullet.dx! * travelTime).toBeCloseTo(state.player.x)
+        expect(boss.fireCd).toBe(shot < 2 ? 0.45 : rest)
+      }
+      state.player.x = 20
+      boss.fireCd = 0
+      updateGame(state, 0, state.start, 120, 60, 0)
+      expect(state.bullets[3]!.dx).toBeLessThan(0)
+      // Dodging does not retarget bullets already in flight.
+      expect(state.bullets[0]!.dx).toBeGreaterThan(0)
+    }
+  })
+
+  test("sniper projectiles travel faster than other regular shots throughout a run", () => {
+    const random = spyOn(Math, "random").mockReturnValue(0)
+    try {
+      for (const seconds of [0, 600, 1800]) {
+        const state = newGame(120, 60, 8)
+        updateGame(state, 0, state.start, 120, 60, 0)
+        const sniper = state.enemies.find((enemy) => enemy.fireType === "aimed")!
+        const burster = state.enemies.find((enemy) => enemy.fireType === "burst")!
+        const standard = state.enemies.filter((enemy) => enemy.fireType === "standard").at(-1)!
+        state.enemies = [sniper, burster, standard]
+        for (const enemy of state.enemies) enemy.fireCd = 0
+        const now = state.start + seconds * 1000
+        updateGame(state, 0, now, 120, 60, 0)
+        expect(state.bullets).toHaveLength(3)
+        const bulletFor = (enemy: typeof sniper) => state.bullets.find((bullet) =>
+          bullet.x === Math.round(enemy.x) && bullet.y === Math.round(enemy.y + enemy.sprite.length))!
+        const sniperBullet = bulletFor(sniper)
+        const standardBullet = bulletFor(standard)
+        const bursterBullet = bulletFor(burster)
+        const sniperSpeed = Math.hypot(sniperBullet.dx ?? 0, sniperBullet.dy)
+        expect(sniperSpeed).toBeGreaterThanOrEqual(28 - 1e-6)
+        expect(sniperSpeed).toBeGreaterThan(standardBullet.dy)
+        expect(sniperSpeed).toBeGreaterThan(bursterBullet.dy)
+        expect(sniperBullet.damage).toBe(1)
+        expect(sniperBullet.friendly).toBe(false)
+        expect(sniper.fireCd).toBe(1.6)
+        const y = sniperBullet.y
+        updateGame(state, 0.25, now + 250, 120, 60, 0)
+        expect(sniperBullet.y - y).toBeCloseTo(sniperBullet.dy * 0.25)
+      }
+    } finally {
+      random.mockRestore()
+    }
+  })
+
   test("creates a centered player and clamps it when resized", () => {
     const state = newGame(80, 30)
     expect(state.player.x).toBe(40)
@@ -72,7 +134,7 @@ describe("game progression", () => {
 
     state.gunLevel = 5
     shoot(state, 2_000, first)
-    expect(state.bullets).toHaveLength(4)
+    expect(state.bullets).toHaveLength(3)
     expect(gunCostToNext(8)).toBe(0)
   })
 })
@@ -80,6 +142,7 @@ describe("game progression", () => {
 describe("embeddable session", () => {
   test("supports host-driven input, resize, pause, and restart", async () => {
     const game = new InvadersGame(80, 30)
+    game.start()
     await game.tap({ name: "p" })
     expect(game.paused).toBe(true)
     await game.tap({ name: "space" })

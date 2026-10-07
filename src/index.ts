@@ -31,7 +31,9 @@ const game = await InvadersGame.load(width, height, options.level)
 let titleLevel = options.level
 
 renderer.keyInput.on("keypress", (key: KeyEvent) => {
-  void game.press(key)
+  // Raw terminals do not report releases: expire movement between repeats.
+  // Kitty events support independent held keys and immediate release.
+  void game.press(key, key.source === "kitty")
 })
 
 renderer.keyInput.on("keyrelease", (key: KeyEvent) => {
